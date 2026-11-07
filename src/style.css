@@ -2,7 +2,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #111; }
 canvas { display: block; }
 
 #hud {
-  position: fixed; top: 12px; left: 12px; padding: 10px 12px;
+  position: fixed; top: 46px; left: 12px; max-width: calc(100vw - 24px); padding: 10px 12px;
   font: 13px/1.5 system-ui, sans-serif; color: #e6e9ee;
   background: rgba(14, 17, 22, 0.75); border-radius: 8px; pointer-events: none;
 }
@@ -69,3 +69,42 @@ canvas { display: block; }
   margin-top: 16px; padding: 6px 16px; font: inherit; color: #0e1116;
   background: #9fd3ff; border: 0; border-radius: 6px; cursor: pointer;
 }
+
+#menubar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 15; height: 34px;
+  display: flex; align-items: center; gap: 2px; padding: 0 6px;
+  font: 13px/1 system-ui, sans-serif; color: #e6e9ee;
+  background: rgba(18, 22, 28, 0.92); border-bottom: 1px solid #262d39;
+  backdrop-filter: blur(6px);
+}
+#menubar button {
+  height: 26px; padding: 0 10px; font: inherit; color: inherit;
+  background: transparent; border: 0; border-radius: 5px; cursor: pointer;
+}
+#menubar button:hover, #menubar .menu-button.open { background: rgba(255, 255, 255, 0.08); }
+#menubar .caret { color: #9aa3ad; font-size: 10px; }
+#menubar .bar-toggle.active { background: rgba(159, 211, 255, 0.18); color: #9fd3ff; }
+#menubar kbd, .menu-panel kbd {
+  margin-left: 6px; padding: 1px 5px; font: 11px/1.4 ui-monospace, Consolas, monospace;
+  color: #9aa3ad; background: rgba(255, 255, 255, 0.06); border-radius: 3px;
+}
+#menubar .menu { position: relative; }
+.menu-panel {
+  position: absolute; top: 30px; left: 0; min-width: 270px; padding: 4px;
+  background: rgba(22, 26, 33, 0.98); border: 1px solid #2f3746; border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+}
+.menu-panel .row {
+  display: flex; align-items: center; gap: 6px; padding: 7px 8px;
+  border-radius: 5px; cursor: pointer; white-space: nowrap;
+}
+.menu-panel .row:hover { background: rgba(159, 211, 255, 0.12); }
+.menu-panel .row.disabled { color: #5d6672; cursor: default; }
+.menu-panel .row.disabled:hover { background: none; }
+.menu-panel .check { width: 14px; color: #9fd3ff; text-align: center; }
+.menu-panel .label { flex: 1; }
+.menu-panel .row.range { flex-wrap: wrap; cursor: default; }
+.menu-panel .row.range:hover { background: none; }
+.menu-panel .value { color: #9aa3ad; font-variant-numeric: tabular-nums; }
+.menu-panel .row.range input { flex-basis: 100%; margin: 4px 0 0 20px; accent-color: #9fd3ff; }
+.menu-panel .sep { height: 1px; margin: 4px 6px; background: #2f3746; }

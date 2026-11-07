@@ -14,6 +14,7 @@ import { difficulty } from './trails/stats.js';
 import { GroundMesh } from './ground.js';
 import { withRetry } from './retry.js';
 import { LoadingScreen } from './loading.js';
+import { MenuBar } from './menubar.js';
 
 // Which file to load: ?file=ascutney-1.4m.copc.laz to compare thinning levels.
 const params = new URLSearchParams(location.search);
@@ -277,7 +278,7 @@ function updateHud(extra) {
     ${(loadedPoints / 1e6).toFixed(1)}M / ${(totalPoints / 1e6).toFixed(1)}M points ${loadStatus}<br>
     ${cursorInfo ? `<span class="cursor">${cursorInfo}</span><br>` : ''}
     ${editing ? `<div class="editor"><b style="color:#9fd3ff">Editing trails</b> · T to stop · Ctrl+Z undo<br>${editorStatus}</div>` : ''}
-    <span class="keys">T edit trails · V vegetation · H height above ground · E shading · [ ] point size · drag orbit · right-drag pan</span>`;
+    <span class="keys">Drag to orbit · Shift-drag to pan · wheel to zoom · display options in View</span>`;
 }
 
 // ---------- Terrain + cursor ----------
@@ -370,7 +371,8 @@ function setupTrails(t) {
   trailView.setResolution(innerWidth, innerHeight);
   editor = new TrailEditor({
     network, geometry, terrain: t, camera, dom: renderer.domElement, controls, view: trailView,
-    onStatus: (s) => { editorStatus = s; updateHud(); },
+    // Also keeps the menu bar's "Edit trails" button in sync with the T key.
+    onStatus: (s) => { editorStatus = s; updateHud(); menuBar.refresh(); },
   });
   uniforms.uTrail.value = trailMask.texture;
   uniforms.uHasTrail.value = 1;
@@ -544,6 +546,9 @@ async function load() {
     console.error(`[load] ${failed.length} chunk(s) failed after retries (${missing} points missing):`, failed);
   }
 
+  // Measured before the final frame wait, which can pause in a background tab.
+  const seconds = ((performance.now() - t0) / 1000).toFixed(1);
+
   // Upload everything to the GPU and compile shaders behind the loading
   // screen, so the reveal doesn't stall.
   loading.update(0.98, 'Preparing the view…');
@@ -552,7 +557,6 @@ async function load() {
   renderer.setRenderTarget(null);
   await new Promise((r) => requestAnimationFrame(r));
 
-  const seconds = ((performance.now() - t0) / 1000).toFixed(1);
   updateHud(
     failed.length
       ? `· loaded in ${seconds}s · <span style="color:#ffd34d">${failed.length} chunk${failed.length > 1 ? 's' : ''} failed (see console)</span>`
@@ -697,30 +701,98 @@ function tickFps() {
   }
 }
 
-// ---------- Keys ----------
+// ---------- View options ----------
+// One place for every display toggle. The View menu and the keyboard
+// shortcuts both go through these, so they always agree.
 let edlOn = true;
 let ghostTrails = false;
+
+const view = {
+  vegetation: {
+    label: 'Vegetation', shortcut: 'V',
+    get: () => uniforms.uShowVeg.value > 0.5,
+    set: (on) => { uniforms.uShowVeg.value = on ? 1 : 0; },
+  },
+  ground: {
+    label: 'Ground surface', shortcut: 'M',
+    get: () => ground?.mesh.visible ?? true,
+    set: (on) => { if (ground) ground.mesh.visible = on; },
+  },
+  heightColors: {
+    label: 'Color by height above ground', shortcut: 'H',
+    get: () => uniforms.uColorMode.value > 0.5,
+    set: (on) => { uniforms.uColorMode.value = on ? 1 : 0; },
+  },
+  shading: {
+    label: 'Eye-Dome Lighting', shortcut: 'E',
+    get: () => edlOn,
+    set: (on) => { edlOn = on; },
+  },
+  ghost: {
+    label: 'Ghost hidden trails', shortcut: 'G',
+    get: () => ghostTrails,
+    set: (on) => {
+      ghostTrails = on;
+      // Ghosted trails are visible, so they can be picked through terrain.
+      if (editor) editor.pickHidden = on;
+    },
+  },
+  fps: {
+    label: 'FPS counter', shortcut: 'P',
+    get: () => !fps.hidden,
+    set: (on) => { fps.hidden = !on; },
+  },
+};
+const toggle = (opt) => opt.set(!opt.get());
+
+// ---------- Menu bar ----------
+const menuBar = new MenuBar();
+menuBar.addMenu('View', [
+  { type: 'toggle', ...view.vegetation },
+  { type: 'toggle', ...view.ground },
+  { type: 'separator' },
+  { type: 'toggle', ...view.heightColors },
+  { type: 'toggle', ...view.shading },
+  {
+    type: 'range', label: 'Point size', min: 0.6, max: 4, step: 0.1,
+    get: () => uniforms.uSize.value,
+    set: (v) => { uniforms.uSize.value = v; },
+    format: (v) => `${v.toFixed(1)} m`,
+  },
+  { type: 'separator' },
+  { type: 'toggle', ...view.ghost },
+  { type: 'toggle', ...view.fps },
+  { type: 'separator' },
+  { type: 'action', label: 'Frame selected', shortcut: 'F', action: () => frameSelected(), enabled: () => !!editor?.selection },
+  { type: 'action', label: 'Frame whole mountain', shortcut: 'Home', action: () => homeView && flyTo(homeView.position, homeView.target) },
+]);
+menuBar.addToggleButton({
+  label: 'Edit trails', shortcut: 'T',
+  get: () => !!editor?.enabled,
+  set: (on) => editor?.setEnabled(on),
+});
+menuBar.addButton({ label: 'Controls', shortcut: '?', action: () => { help.hidden = !help.hidden; } });
+
+// ---------- Keys ----------
 const typing = (e) => e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
 
 addEventListener('keydown', (e) => {
   if (typing(e) || e.ctrlKey || e.metaKey || e.altKey) return;
   switch (e.key) {
-    case 'v': case 'V': uniforms.uShowVeg.value = 1 - uniforms.uShowVeg.value; break;
-    case 'h': case 'H': uniforms.uColorMode.value = 1 - uniforms.uColorMode.value; break;
-    case 'e': case 'E': edlOn = !edlOn; break;
-    case 'g': case 'G':
-      ghostTrails = !ghostTrails;
-      // Ghosted trails are visible, so they can be picked through terrain.
-      if (editor) editor.pickHidden = ghostTrails;
-      break;
-    case 'm': case 'M': if (ground) ground.mesh.visible = !ground.mesh.visible; break;
-    case ']': uniforms.uSize.value *= 1.2; break;
-    case '[': uniforms.uSize.value /= 1.2; break;
+    case 'v': case 'V': toggle(view.vegetation); break;
+    case 'm': case 'M': toggle(view.ground); break;
+    case 'h': case 'H': toggle(view.heightColors); break;
+    case 'e': case 'E': toggle(view.shading); break;
+    case 'g': case 'G': toggle(view.ghost); break;
+    case 'p': case 'P': toggle(view.fps); break;
+    case ']': uniforms.uSize.value = Math.min(4, uniforms.uSize.value * 1.2); break;
+    case '[': uniforms.uSize.value = Math.max(0.6, uniforms.uSize.value / 1.2); break;
     case 'f': case 'F': frameSelected(); break;
     case 'Home': if (homeView) flyTo(homeView.position, homeView.target); break;
     case '?': help.hidden = !help.hidden; break;
-    case 'p': case 'P': fps.hidden = !fps.hidden; break;
+    default: return;
   }
+  menuBar.refresh();
 });
 
 addEventListener('resize', () => {
