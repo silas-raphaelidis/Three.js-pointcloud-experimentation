@@ -4,6 +4,7 @@ import { Copc } from 'copc';
 import { createLazPerf } from 'laz-perf';
 import lazPerfWasmUrl from 'laz-perf/lib/web/laz-perf.wasm?url';
 import { Terrain, terrainGLSL } from './terrain.js';
+import { TrailMask, trailGLSL } from './trails.js';
 
 // Which file to load: ?file=ascutney-1.4m.copc.laz to compare thinning levels.
 const params = new URLSearchParams(location.search);
@@ -39,6 +40,13 @@ const uniforms = {
   uHeightOrigin: { value: new THREE.Vector2() },
   uHeightRes: { value: 1 },
   uHasHeight: { value: 0 },
+  // Trail clearing (filled in once the height map loads).
+  uTrail: { value: null },
+  uHasTrail: { value: 0 },
+  uTime: { value: 0 },
+  uFallDuration: { value: 0.9 }, // seconds for a point to settle
+  uFallStagger: { value: 0.6 },  // extra delay for the tallest trees
+  uSnow: { value: new THREE.Color(0xf4f7fb) },
 };
 const material = new THREE.ShaderMaterial({
   uniforms,
@@ -48,8 +56,13 @@ const material = new THREE.ShaderMaterial({
     uniform float uProjScale;
     uniform float uShowVeg;
     uniform float uColorMode;
+    uniform float uTime;
+    uniform float uFallDuration;
+    uniform float uFallStagger;
+    uniform vec3 uSnow;
     varying vec3 vColor;
     ${terrainGLSL}
+    ${trailGLSL}
 
     // Height above ground -> color: blue at ground level, green at shrub
     // height, yellow/red for tall trees.
@@ -61,14 +74,45 @@ const material = new THREE.ShaderMaterial({
 
     void main() {
       bool isVeg = cls > 2.5 && cls < 5.5;
-      vec4 mv = modelViewMatrix * vec4(position, 1.0);
-      gl_Position = projectionMatrix * mv;
-      if (isVeg && uShowVeg < 0.5) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); }
-      gl_PointSize = clamp(uSize * uProjScale / -mv.z, 1.0, 24.0);
+      bool isGround = cls > 1.5 && cls < 2.5;
+      vec3 pos = position;
       vColor = color;
-      if (uColorMode > 0.5 && uHasHeight > 0.5) {
-        vColor = hagColor(position.z - terrainHeight(position.xy));
+
+      float ground = 0.0;
+      float hag = 0.0;
+      if (uHasHeight > 0.5) {
+        ground = terrainHeight(pos.xy);
+        hag = pos.z - ground;
+        if (uColorMode > 0.5) vColor = hagColor(hag);
       }
+
+      // ---- Trail clearing ----
+      // Inside a trail, everything that isn't ground falls onto the height
+      // map once the cut reaches it. Taller trees start a little later so the
+      // canopy settles from the top down; everything in the trail turns to snow.
+      bool cleared = false;
+      if (uHasTrail > 0.5) {
+        vec2 trail = trailAt(pos.xy);
+        float strength = trail.x;
+        if (strength > 0.001) {
+          float tall = clamp(hag / 25.0, 0.0, 1.0);
+          float start = trail.y + (isGround ? 0.0 : uFallStagger * tall);
+          float t = clamp((uTime - start) / (uFallDuration * (0.6 + 0.4 * tall)), 0.0, 1.0);
+          float fall = t * t;               // accelerate like gravity
+          if (!isGround) {
+            pos.z = mix(pos.z, ground + 0.05, strength * fall);
+            // Points pressed fully flat count as ground for the V toggle.
+            cleared = strength * fall > 0.98;
+          }
+          float snow = strength * smoothstep(0.0, 1.0, t);
+          vColor = mix(vColor, uSnow, snow);
+        }
+      }
+
+      vec4 mv = modelViewMatrix * vec4(pos, 1.0);
+      gl_Position = projectionMatrix * mv;
+      if (isVeg && !cleared && uShowVeg < 0.5) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); }
+      gl_PointSize = clamp(uSize * uProjScale / -mv.z, 1.0, 24.0);
     }`,
   fragmentShader: /* glsl */ `
     varying vec3 vColor;
@@ -188,6 +232,7 @@ function updateHud(extra) {
     <strong>${decodeURIComponent(FILE.split('/').pop())}</strong><br>
     ${(loadedPoints / 1e6).toFixed(1)}M / ${(totalPoints / 1e6).toFixed(1)}M points ${loadStatus}<br>
     ${cursorInfo ? `<span class="cursor">${cursorInfo}</span><br>` : ''}
+    <span class="keys">${paintMode ? '<b style="color:#9fd3ff">Trail mode on</b> · drag' : 'Shift-drag or T'} to cut a trail (${trailWidth} m · − = width · R regrow)</span><br>
     <span class="keys">V vegetation · H height above ground · E shading · [ ] point size · drag orbit · right-drag pan</span>`;
 }
 
@@ -195,6 +240,16 @@ function updateHud(extra) {
 let terrain = null;
 let sceneOffsetZ = 0; // UTM elevation of the scene origin, for readouts
 
+// ---------- Trail painting ----------
+let trailMask = null;
+let trailWidth = 36;        // meters; real ski trails run ~30–60 m
+const TRAIL_FEATHER = 8;    // soft tree line on each side, meters
+const clock = new THREE.Clock();
+let painting = false;
+let shiftHeld = false;
+let paintMode = false;      // T toggles: plain drag paints (handy on trackpads)
+const lastPaint = new THREE.Vector3();
+let hasLastPaint = false;
 // Things drawn on top of the point cloud (after the EDL pass), so markers
 // stay crisp and visible. Later: trail lines, peaks/bases, lift cables.
 const overlay = new THREE.Scene();
@@ -244,6 +299,7 @@ function updateCursor() {
   cursor.position.copy(hit).addScaledVector(normal, 0.2);
   cursor.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
   cursor.visible = true;
+  if (painting) paintTo(hit);
 
   const slope = terrain.slopeAt(hit.x, hit.y);
   const [rating, color] = difficulty(slope);
@@ -255,12 +311,60 @@ function updateCursor() {
   updateHud();
 }
 
-// Keep the ring the same size on screen regardless of distance.
+// Keep the ring the same size on screen regardless of distance; while Shift
+// is held it shows the real brush footprint instead.
 function scaleCursor() {
   if (!cursor.visible) return;
-  const dist = camera.position.distanceTo(cursor.position);
-  cursor.scale.setScalar(dist * 0.012);
+  if (shiftHeld || painting || paintMode) {
+    cursor.scale.setScalar(trailWidth / 2);
+    cursor.material.color.set(0x9fd3ff);
+  } else {
+    const dist = camera.position.distanceTo(cursor.position);
+    cursor.scale.setScalar(dist * 0.012);
+    cursor.material.color.set(0xffffff);
+  }
 }
+
+function paintTo(p) {
+  if (!trailMask) return;
+  const now = clock.getElapsedTime();
+  if (hasLastPaint) {
+    trailMask.paintSegment(lastPaint.x, lastPaint.y, p.x, p.y, trailWidth, TRAIL_FEATHER, now);
+  } else {
+    trailMask.paintSegment(p.x, p.y, p.x, p.y, trailWidth, TRAIL_FEATHER, now);
+  }
+  lastPaint.copy(p);
+  hasLastPaint = true;
+}
+
+// Capture phase so Shift-drag reaches us before OrbitControls (which would
+// otherwise treat Shift-drag as a pan).
+renderer.domElement.addEventListener(
+  'pointerdown',
+  (e) => {
+    if (!(e.shiftKey || paintMode) || e.button !== 0 || !terrain) return;
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    try { renderer.domElement.setPointerCapture(e.pointerId); } catch { /* synthetic events */ }
+    painting = true;
+    hasLastPaint = false;
+    controls.enabled = false;
+    // Start the stroke exactly where the button went down.
+    pointer.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+    pointerDirty = true;
+    updateCursor();
+  },
+  { capture: true }
+);
+renderer.domElement.addEventListener('pointerup', (e) => {
+  if (!painting) return;
+  painting = false;
+  controls.enabled = true;
+  try { renderer.domElement.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
+});
+addEventListener('keydown', (e) => { if (e.key === 'Shift') shiftHeld = true; });
+addEventListener('keyup', (e) => { if (e.key === 'Shift') shiftHeld = false; });
+addEventListener('blur', () => { shiftHeld = false; });
 
 // ---------- Loading ----------
 async function load() {
@@ -285,6 +389,9 @@ async function load() {
       uniforms.uHeightOrigin.value.copy(t.origin);
       uniforms.uHeightRes.value = t.res;
       uniforms.uHasHeight.value = 1;
+      trailMask = new TrailMask(t);
+      uniforms.uTrail.value = trailMask.texture;
+      uniforms.uHasTrail.value = 1;
     })
     .catch((err) => console.error('height map failed to load', err));
 
@@ -364,6 +471,10 @@ load().catch((err) => {
 addEventListener('keydown', (e) => {
   if (e.key === 'v' || e.key === 'V') uniforms.uShowVeg.value = 1 - uniforms.uShowVeg.value;
   if (e.key === 'h' || e.key === 'H') uniforms.uColorMode.value = 1 - uniforms.uColorMode.value;
+  if (e.key === 'r' || e.key === 'R') trailMask?.clear();
+  if (e.key === 't' || e.key === 'T') { paintMode = !paintMode; updateHud(); }
+  if (e.key === '-' || e.key === '_') { trailWidth = Math.max(10, trailWidth - 4); updateHud(); }
+  if (e.key === '=' || e.key === '+') { trailWidth = Math.min(90, trailWidth + 4); updateHud(); }
   if (e.key === ']') uniforms.uSize.value *= 1.2;
   if (e.key === '[') uniforms.uSize.value /= 1.2;
 });
@@ -387,8 +498,10 @@ renderer.domElement.addEventListener('pointerdown', () => renderer.domElement.fo
 
 renderer.setAnimationLoop(() => {
   controls.update();
+  uniforms.uTime.value = clock.getElapsedTime();
   updateCursor();
   scaleCursor();
+  trailMask?.flush();
   if (edlOn) {
     renderer.setRenderTarget(sceneTarget);
     renderer.render(scene, camera);
