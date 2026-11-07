@@ -36,16 +36,22 @@ function dotTexture() {
  * preview line while drawing. Read-only: it never edits the network.
  */
 export class TrailView {
-  constructor(network, geometry, terrain, overlay) {
+  /**
+   * @param {(trailId: string) => string} ratingColor  line color for a trail's difficulty
+   */
+  constructor(network, geometry, terrain, overlay, ratingColor) {
     this.network = network;
     this.geometry = geometry;
     this.terrain = terrain;
+    this.ratingColor = ratingColor;
     this.group = new THREE.Group();
     overlay.add(this.group);
 
     this.resolution = new THREE.Vector2(innerWidth, innerHeight);
-    this.trailObjects = new Map(); // trailId -> { line, edges }
+    this.trailObjects = new Map(); // trailId -> { line, edges, color }
     this.selectedTrail = null;
+    this.hoverTrails = new Set();
+    this.hoverKey = '';
 
     const dot = dotTexture();
     const pointsMaterial = (size, color) =>
@@ -153,7 +159,7 @@ export class TrailView {
     edges.renderOrder = 1;
 
     this.group.add(line, edges);
-    return { line, edges };
+    return { line, edges, color: this.ratingColor(id) };
   }
 
   #rebuildNodes() {
@@ -171,10 +177,20 @@ export class TrailView {
     g.computeBoundingSphere();
   }
 
+  /** Re-read every trail's difficulty color (thresholds or smoothing changed). */
+  recolor() {
+    for (const [id, obj] of this.trailObjects) obj.color = this.ratingColor(id);
+    this.#applySelectionColor();
+  }
+
+  // Lines show each trail's difficulty color; selected or hovered trails are
+  // yellow (selected also drawn thicker).
   #applySelectionColor() {
-    for (const [id, { line }] of this.trailObjects) {
-      line.material.color.set(id === this.selectedTrail ? COLORS.selected : COLORS.line);
-      line.material.linewidth = id === this.selectedTrail ? 4 : 2.5;
+    for (const [id, obj] of this.trailObjects) {
+      const selected = id === this.selectedTrail;
+      const hovered = this.hoverTrails.has(id);
+      obj.line.material.color.set(selected || hovered ? COLORS.selected : obj.color);
+      obj.line.material.linewidth = selected ? 4 : hovered ? 3.5 : 3;
     }
   }
 
@@ -186,9 +202,12 @@ export class TrailView {
    * @param {Array<{x:number,y:number}>|null} s.handles  width handles
    * @param {{from:{x,y}, to:{x,y}}|null} s.preview      drawing preview
    */
-  setState({ selectedTrail = null, highlightNode = null, handles = null, preview = null }) {
-    if (selectedTrail !== this.selectedTrail) {
+  setState({ selectedTrail = null, hoverTrails = [], highlightNode = null, handles = null, preview = null }) {
+    const hoverKey = hoverTrails.join(',');
+    if (selectedTrail !== this.selectedTrail || hoverKey !== this.hoverKey) {
       this.selectedTrail = selectedTrail;
+      this.hoverTrails = new Set(hoverTrails);
+      this.hoverKey = hoverKey;
       this.#applySelectionColor();
     }
     this.#setPoints(this.highlight, highlightNode ? [highlightNode] : []);

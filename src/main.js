@@ -10,7 +10,8 @@ import { TrailGeometry } from './trails/spline.js';
 import { TrailRasterizer } from './trails/rasterize.js';
 import { TrailView } from './trails/view.js';
 import { TrailEditor } from './trails/editor.js';
-import { difficulty } from './trails/stats.js';
+import { difficulty, trailStats } from './trails/stats.js';
+import { TrailPanel } from './trails/panel.js';
 import { GroundMesh } from './ground.js';
 import { withRetry } from './retry.js';
 import { LoadingScreen } from './loading.js';
@@ -66,8 +67,8 @@ const uniforms = {
   uTrail: { value: null },
   uHasTrail: { value: 0 },
   uTime: { value: 0 },
-  uFallDuration: { value: 0.9 }, // seconds for a point to settle
-  uFallStagger: { value: 0.6 },  // extra delay for the tallest trees
+  uFallDuration: { value: 0.55 }, // seconds for a point to settle
+  uFallStagger: { value: 0.35 },  // extra delay for the tallest trees
   uSnow: { value: new THREE.Color(0xf4f7fb) },
   // Ground color ramp, shared by ground points (CPU) and the ground mesh (GPU).
   uRamp0: { value: new THREE.Color(0x3b4a3f) },
@@ -296,14 +297,12 @@ let loadedPoints = 0;
 let totalPoints = 0;
 let loadStatus = '';
 let cursorInfo = '';
-let editorStatus = '';
 function updateHud(extra) {
   if (extra !== undefined) loadStatus = extra;
   hud.innerHTML = `
     <strong>${decodeURIComponent(FILE.split('/').pop())}</strong><br>
     ${(loadedPoints / 1e6).toFixed(1)}M / ${(totalPoints / 1e6).toFixed(1)}M points ${loadStatus}<br>
     ${cursorInfo ? `<span class="cursor">${cursorInfo}</span><br>` : ''}
-    ${editorStatus ? `<div class="editor">${editorStatus}</div>` : ''}
     <span class="keys">Drag to orbit · Shift-drag to pan · wheel to zoom · right-click for trail options</span>`;
 }
 
@@ -398,12 +397,18 @@ function setupTrails(t) {
   geometry = new TrailGeometry(network, TRAIL_FEATHER);
   trailMask = new TrailMask(t);
   rasterizer = new TrailRasterizer(geometry, trailMask);
-  trailView = new TrailView(network, geometry, t, overlay);
+  // Trail lines are drawn in their difficulty color.
+  const ratingColor = (id) => {
+    const g = geometry.get(id);
+    const st = g && trailStats(g.samples, t);
+    return st ? st.rating.mapColor : '#ffffff';
+  };
+  trailView = new TrailView(network, geometry, t, overlay, ratingColor);
   trailView.setResolution(innerWidth, innerHeight);
   editor = new TrailEditor({
     network, geometry, terrain: t, camera, dom: renderer.domElement, controls, view: trailView,
     // Also keeps the menu bar's "Edit trails" button in sync with the T key.
-    onStatus: (s) => { editorStatus = s; updateHud(); menuBar.refresh(); },
+    onStatus: (state) => { trailPanel.render(state); menuBar.refresh(); },
     onLocked: () => trailLock.nudge(),
   });
   uniforms.uTrail.value = trailMask.texture;
@@ -822,11 +827,12 @@ const colorItem = (label, mode, shortcut) => ({
 });
 
 // Edited thresholds: refresh the cursor readout and the selected trail's rating.
-onThresholdsChange(() => { pointerDirty = true; editor?.refresh(); });
+onThresholdsChange(() => { pointerDirty = true; trailView?.recolor(); editor?.refresh(); });
 // Smoothing slider: recompute the slope map (colors, readout and ratings follow).
 onSmoothingChange((meters) => {
   if (!terrain) return;
   terrain.setSlopeSmoothing(meters);
+  trailView?.recolor();
   pointerDirty = true;
   editor?.refresh();
 });
@@ -860,6 +866,9 @@ menuBar.addButton({ label: 'Controls', shortcut: '?', action: () => { help.hidde
 
 // Lock button on the left edge: blocks trail selection and editing.
 const trailLock = new TrailLock({ onChange: (locked) => editor?.setLocked(locked) });
+
+// Bottom-left panel for the selected trail, with an editable name.
+const trailPanel = new TrailPanel({ onRename: (id, name) => editor?.rename(id, name) });
 
 // ---------- Keys ----------
 const typing = (e) => e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;

@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { trailStats } from './stats.js';
 import { ContextMenu } from './menu.js';
+import { sampleSpline } from './spline.js';
+import { pickRunName } from './names.js';
 
 const PICK_PX = 11;         // screen radius for grabbing points and handles
 const CLICK_PX = 5;         // movement allowed before a press counts as a drag
@@ -104,40 +106,51 @@ export class TrailEditor {
       preview = { from: last, to: this.cursorWorld };
     }
 
+    // Hovering a trail, or a point on it (a junction: every trail through it).
+    const h = this.locked ? null : this.hover;
+    const hoverTrails = h?.type === 'line' ? [h.trailId]
+      : h?.type === 'node' ? this.network.trailsUsingNode(h.nodeId)
+      : [];
     this.view.setState({
       selectedTrail: this.drawing ?? sel?.trailId ?? null,
+      hoverTrails,
       highlightNode,
       handles,
       preview,
     });
-    this.onStatus?.(this.status());
+    this.onStatus?.(this.panelState());
   }
 
-  /** Editing panel text, or '' when nothing is selected or being drawn. */
-  status() {
+  /** What the trail panel should show, or null when nothing is selected or drawn. */
+  panelState() {
     if (this.drawing) {
-      const n = this.network.trail(this.drawing)?.points.length ?? 0;
-      return `<b>Drawing</b> · ${n} point${n === 1 ? '' : 's'} · click to add · double-click or Enter to finish · Esc to cancel`;
+      return { kind: 'drawing', points: this.network.trail(this.drawing)?.points.length ?? 0 };
     }
     const sel = this.selection;
-    if (!sel) return '';
+    if (!sel) return null;
     const t = this.network.trail(sel.trailId);
     const geo = this.geometry.get(sel.trailId);
-    const st = geo && trailStats(geo.samples, this.terrain);
-    let line = `<b>${t.name}</b>`;
-    if (st) {
-      line +=
-        ` · ${st.length.toFixed(0)} m long · ${st.vertical.toFixed(0)} m vertical` +
-        ` · steepest ${(st.maxSustained * 100).toFixed(0)}% · <span style="color:${st.rating.color}">${st.rating.name}</span>`;
-    }
-    if (sel.index !== null) {
-      const p = t.points[sel.index];
-      const shared = this.network.isJunction(p.node) ? ' (junction)' : '';
-      line += `<br>Point ${sel.index + 1}/${t.points.length}${shared} · width ${p.width.toFixed(0)} m · drag handles or − = · Del removes · B branches`;
-    } else {
-      line += '<br>Double-click the trail to add a point · drag points to reshape · F to frame';
-    }
-    return line;
+    const point = sel.index === null ? null : {
+      index: sel.index,
+      count: t.points.length,
+      junction: this.network.isJunction(t.points[sel.index].node),
+      width: t.points[sel.index].width,
+    };
+    return {
+      kind: 'trail',
+      trailId: t.id,
+      name: t.name,
+      stats: geo ? trailStats(geo.samples, this.terrain) : null,
+      point,
+    };
+  }
+
+  /** Rename a trail (undoable). */
+  rename(trailId, name) {
+    if (this.locked) { this.onLocked?.(); return; }
+    this.#snapshot();
+    this.network.rename(trailId, name);
+    this.refresh();
   }
 
   // ---------- Geometry helpers ----------
@@ -250,7 +263,8 @@ export class TrailEditor {
 
   #startTrail(first) {
     this.#snapshot();
-    const t = this.network.addTrail({ points: [first] });
+    // Named for real when finished, once its difficulty is known.
+    const t = this.network.addTrail({ name: 'New trail', points: [first] });
     this.drawing = t.id;
     this.selection = null;
   }
@@ -262,7 +276,7 @@ export class TrailEditor {
   #branchFromLine(h) {
     this.#snapshot();
     const nodeId = this.network.insertPoint(h.trailId, { x: h.x, y: h.y, width: h.w }, h.seg + 1);
-    const t = this.network.addTrail({ points: [{ node: nodeId, width: Math.min(this.defaultWidth, 24) }] });
+    const t = this.network.addTrail({ name: 'New trail', points: [{ node: nodeId, width: Math.min(this.defaultWidth, 24) }] });
     this.drawing = t.id;
     this.selection = null;
   }
@@ -292,8 +306,17 @@ export class TrailEditor {
     if (t && t.points.length < 2) {
       this.network.removeTrail(id);
     } else if (t) {
+      this.#giveDefaultName(t);
       this.selection = { trailId: id, index: null };
     }
+  }
+
+  /** Name a finished trail from the run-name list for its difficulty. */
+  #giveDefaultName(t) {
+    const samples = sampleSpline(this.geometry.controlPoints(t));
+    const rating = trailStats(samples, this.terrain)?.rating.index ?? 0;
+    const used = [...this.network.trails.values()].map((x) => x.name);
+    this.network.rename(t.id, pickRunName(rating, used));
   }
 
   #cancelDrawing() {

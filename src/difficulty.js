@@ -88,6 +88,13 @@ function changed() {
   for (const fn of listeners) fn(getThresholds());
 }
 
+/**
+ * A trail is rated by the hardest level that covers at least this share of
+ * its length (counting anything steeper too), not by its single steepest
+ * spot. E.g. 0.1: double black only if >= 10 % of the trail is that steep.
+ */
+export const SIGNIFICANT_SHARE = 0.1;
+
 /** Rating for a slope: { name, color, text, index }. */
 export function rate(slope) {
   const i = slope < thresholds[0] ? 0 : slope < thresholds[1] ? 1 : slope < thresholds[2] ? 2 : 3;
