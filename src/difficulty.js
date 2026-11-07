@@ -47,6 +47,36 @@ export function resetThresholds() {
   changed();
 }
 
+// ---------- Slope smoothing ----------
+// How far (meters) the ground is averaged before measuring slope. Wider
+// windows give calmer, broader bands; narrower ones show more local detail.
+export const SMOOTHING = { min: 6, max: 42, step: 4, default: 10 };
+const SMOOTH_KEY = 'ascutney-slope-smoothing-v1';
+const smoothingListeners = new Set();
+let smoothing = (() => {
+  try {
+    const v = Number(localStorage.getItem(SMOOTH_KEY));
+    if (v >= SMOOTHING.min && v <= SMOOTHING.max) return v;
+  } catch { /* no storage */ }
+  return SMOOTHING.default;
+})();
+
+export function getSmoothing() { return smoothing; }
+
+export function setSmoothing(meters) {
+  const v = Math.min(SMOOTHING.max, Math.max(SMOOTHING.min, Math.round(meters)));
+  if (v === smoothing) return;
+  smoothing = v;
+  try { localStorage.setItem(SMOOTH_KEY, String(v)); } catch { /* ignore */ }
+  for (const fn of smoothingListeners) fn(v);
+}
+
+/** Call fn whenever the smoothing distance changes. */
+export function onSmoothingChange(fn) {
+  smoothingListeners.add(fn);
+  return () => smoothingListeners.delete(fn);
+}
+
 /** Call fn whenever thresholds change. Returns an unsubscribe function. */
 export function onThresholdsChange(fn) {
   listeners.add(fn);
@@ -122,6 +152,7 @@ export class DifficultyLegend {
     document.body.appendChild(this.el);
     this.#render();
     onThresholdsChange(() => this.#syncInputs());
+    onSmoothingChange(() => this.#syncInputs());
   }
 
   show(on) { this.el.hidden = !on; }
@@ -139,8 +170,17 @@ export class DifficultyLegend {
         <div class="row"><span class="sw dbl" style="background:${RATINGS[3].color}"></span><span class="name">Double black</span><span class="range">above</span></div>
       </div>
       <div class="degrees"></div>
+      <div class="smoothing">
+        <div class="label"><span>Smoothing</span><span class="value"></span></div>
+        <input type="range" min="${SMOOTHING.min}" max="${SMOOTHING.max}" step="${SMOOTHING.step}" value="${smoothing}">
+        <div class="hint">Wider = broader, calmer bands · narrower = more local detail</div>
+      </div>
       <button class="reset">Reset to defaults</button>`;
-    this.el.querySelectorAll('input').forEach((el) => {
+
+    const slider = this.el.querySelector('.smoothing input');
+    slider.addEventListener('input', () => setSmoothing(Number(slider.value)));
+
+    this.el.querySelectorAll('input[data-i]').forEach((el) => {
       el.addEventListener('change', () => {
         const v = Number(el.value);
         if (Number.isFinite(v)) setThreshold(Number(el.dataset.i), v / 100);
@@ -148,16 +188,21 @@ export class DifficultyLegend {
       });
       el.addEventListener('keydown', (e) => { if (e.key === 'Enter') el.blur(); });
     });
-    this.el.querySelector('.reset').addEventListener('click', () => resetThresholds());
+    this.el.querySelector('.reset').addEventListener('click', () => {
+      resetThresholds();
+      setSmoothing(SMOOTHING.default);
+    });
     this.#syncInputs();
   }
 
   #syncInputs() {
     const t = thresholds;
-    this.el.querySelectorAll('input').forEach((el) => {
+    this.el.querySelectorAll('input[data-i]').forEach((el) => {
       if (document.activeElement !== el) el.value = Math.round(t[Number(el.dataset.i)] * 100);
     });
-    this.el.querySelector('.degrees').textContent =
-      `In degrees: ${t.map((v) => `${toDegrees(v)}°`).join(' · ')} · slope measured over ~10 m`;
+    this.el.querySelector('.degrees').textContent = `In degrees: ${t.map((v) => `${toDegrees(v)}°`).join(' · ')}`;
+    const slider = this.el.querySelector('.smoothing input');
+    if (document.activeElement !== slider) slider.value = smoothing;
+    this.el.querySelector('.smoothing .value').textContent = `${smoothing} m`;
   }
 }

@@ -13,8 +13,9 @@ export class Terrain {
   /**
    * @param {string} baseUrl   URL prefix for ascutney-height.{png,json}
    * @param {THREE.Vector3} offset  UTM position of the scene origin
+   * @param {{ slopeSmoothing?: number }} [opts]  meters to smooth slope over
    */
-  static async load(baseUrl, offset) {
+  static async load(baseUrl, offset, { slopeSmoothing = 10 } = {}) {
     const [meta, bitmap] = await Promise.all([
       fetchWithRetry(`${baseUrl}.json`, 'height map metadata').then((r) => r.json()),
       fetchWithRetry(`${baseUrl}.png`, 'height map image')
@@ -38,10 +39,10 @@ export class Terrain {
       heights[i] = zBase + (rgba[p] * 256 + rgba[p + 1]) * meta.zScale;
     }
 
-    return new Terrain(meta, heights, offset);
+    return new Terrain(meta, heights, offset, slopeSmoothing);
   }
 
-  constructor(meta, heights, offset) {
+  constructor(meta, heights, offset, slopeSmoothing = 10) {
     this.width = meta.width;
     this.height = meta.height;
     this.res = meta.resolution;
@@ -62,15 +63,26 @@ export class Terrain {
 
     // Smoothed slope (rise/run) per cell, for difficulty ratings: ratings are
     // about sustained pitch, so single rocks and bumps shouldn't flip a cell.
-    this.slopes = Terrain.#smoothedSlopes(heights, this.width, this.height, this.res, 10);
+    this.slopes = new Float32Array(heights.length);
     this.slopeTexture = new THREE.DataTexture(this.slopes, this.width, this.height, THREE.RedFormat, THREE.FloatType);
     this.slopeTexture.minFilter = this.slopeTexture.magFilter = THREE.NearestFilter;
-    this.slopeTexture.needsUpdate = true;
+    this.setSlopeSmoothing(slopeSmoothing);
   }
 
-  /** Box-blur heights over ~`span` meters, then central-difference slope. */
+  /**
+   * Recompute the smoothed slope map, averaging the ground over about `span`
+   * meters first. Updates `slopes` and `slopeTexture` in place.
+   */
+  setSlopeSmoothing(span) {
+    this.slopes.set(Terrain.#smoothedSlopes(this.heights, this.width, this.height, this.res, span));
+    this.slopeTexture.needsUpdate = true;
+    this.slopeSmoothing = span;
+  }
+
+  /** Box-blur heights over a window ~`span` meters wide, then central-difference slope. */
   static #smoothedSlopes(heights, w, h, res, span) {
-    const r = Math.max(1, Math.round(span / res / 2)); // blur radius in cells
+    // Window is (2r + 1) cells wide, e.g. at 2 m cells: 6, 10, 14 … 42 m.
+    const r = Math.max(1, Math.round((span / res - 1) / 2));
     const blur = (src, horizontal) => {
       const out = new Float32Array(src.length);
       const n = horizontal ? w : h;

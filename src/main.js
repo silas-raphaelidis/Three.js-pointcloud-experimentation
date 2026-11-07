@@ -20,6 +20,8 @@ import {
   difficultyUniforms,
   bindUniforms as bindDifficultyUniforms,
   onThresholdsChange,
+  getSmoothing,
+  onSmoothingChange,
   DifficultyLegend,
 } from './difficulty.js';
 
@@ -483,7 +485,9 @@ async function load() {
   };
 
   // Height map (and everything built on it) loads in parallel with the points.
-  const heightLoad = Terrain.load(`${import.meta.env.BASE_URL}data/ascutney-height`, center).then((t) => {
+  const heightLoad = Terrain.load(`${import.meta.env.BASE_URL}data/ascutney-height`, center, {
+    slopeSmoothing: getSmoothing(),
+  }).then((t) => {
     terrain = t;
     uniforms.uHeight.value = t.texture;
     uniforms.uHeightOrigin.value.copy(t.origin);
@@ -786,6 +790,13 @@ const colorItem = (label, mode, shortcut) => ({
 
 // Edited thresholds: refresh the cursor readout and the selected trail's rating.
 onThresholdsChange(() => { pointerDirty = true; editor?.refresh(); });
+// Smoothing slider: recompute the slope map (colors, readout and ratings follow).
+onSmoothingChange((meters) => {
+  if (!terrain) return;
+  terrain.setSlopeSmoothing(meters);
+  pointerDirty = true;
+  editor?.refresh();
+});
 
 // ---------- Menu bar ----------
 const menuBar = new MenuBar();

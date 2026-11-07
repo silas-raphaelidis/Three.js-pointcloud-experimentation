@@ -132,3 +132,8 @@ canvas { display: block; }
   background: rgba(255, 255, 255, 0.06); border: 1px solid #2f3746; border-radius: 5px; cursor: pointer;
 }
 #legend .reset:hover { background: rgba(255, 255, 255, 0.12); }
+#legend .smoothing { margin-top: 10px; padding-top: 8px; border-top: 1px solid #262d39; }
+#legend .smoothing .label { display: flex; justify-content: space-between; }
+#legend .smoothing .value { color: #9aa3ad; font-variant-numeric: tabular-nums; }
+#legend .smoothing input { width: 100%; margin: 6px 0 2px; accent-color: #9fd3ff; }
+#legend .smoothing .hint { color: #9aa3ad; font-size: 11px; }
