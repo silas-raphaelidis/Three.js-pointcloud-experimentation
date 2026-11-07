@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Copc } from 'copc';
 import { createLazPerf } from 'laz-perf';
 import lazPerfWasmUrl from 'laz-perf/lib/web/laz-perf.wasm?url';
+import { Terrain, terrainGLSL } from './terrain.js';
 
 // Which file to load: ?file=ascutney-1.4m.copc.laz to compare thinning levels.
 const params = new URLSearchParams(location.search);
@@ -32,6 +33,12 @@ const uniforms = {
   uSize: { value: 1.6 },
   uProjScale: { value: 1 },
   uShowVeg: { value: 1 },
+  uColorMode: { value: 0 }, // 0 = class/elevation, 1 = height above ground
+  // Height map (filled in once it loads).
+  uHeight: { value: null },
+  uHeightOrigin: { value: new THREE.Vector2() },
+  uHeightRes: { value: 1 },
+  uHasHeight: { value: 0 },
 };
 const material = new THREE.ShaderMaterial({
   uniforms,
@@ -40,7 +47,18 @@ const material = new THREE.ShaderMaterial({
     uniform float uSize;
     uniform float uProjScale;
     uniform float uShowVeg;
+    uniform float uColorMode;
     varying vec3 vColor;
+    ${terrainGLSL}
+
+    // Height above ground -> color: blue at ground level, green at shrub
+    // height, yellow/red for tall trees.
+    vec3 hagColor(float h) {
+      if (h < 0.3) return vec3(0.15, 0.35, 0.9);
+      if (h < 2.0) return mix(vec3(0.2, 0.75, 0.3), vec3(0.6, 0.85, 0.2), (h - 0.3) / 1.7);
+      return mix(vec3(0.95, 0.85, 0.2), vec3(0.9, 0.2, 0.15), clamp((h - 2.0) / 20.0, 0.0, 1.0));
+    }
+
     void main() {
       bool isVeg = cls > 2.5 && cls < 5.5;
       vec4 mv = modelViewMatrix * vec4(position, 1.0);
@@ -48,6 +66,9 @@ const material = new THREE.ShaderMaterial({
       if (isVeg && uShowVeg < 0.5) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); }
       gl_PointSize = clamp(uSize * uProjScale / -mv.z, 1.0, 24.0);
       vColor = color;
+      if (uColorMode > 0.5 && uHasHeight > 0.5) {
+        vColor = hagColor(position.z - terrainHeight(position.xy));
+      }
     }`,
   fragmentShader: /* glsl */ `
     varying vec3 vColor;
@@ -159,11 +180,86 @@ hud.id = 'hud';
 document.body.appendChild(hud);
 let loadedPoints = 0;
 let totalPoints = 0;
-function updateHud(extra = '') {
+let loadStatus = '';
+let cursorInfo = '';
+function updateHud(extra) {
+  if (extra !== undefined) loadStatus = extra;
   hud.innerHTML = `
     <strong>${decodeURIComponent(FILE.split('/').pop())}</strong><br>
-    ${(loadedPoints / 1e6).toFixed(1)}M / ${(totalPoints / 1e6).toFixed(1)}M points ${extra}<br>
-    <span class="keys">V vegetation · E shading · [ ] point size · drag orbit · right-drag pan</span>`;
+    ${(loadedPoints / 1e6).toFixed(1)}M / ${(totalPoints / 1e6).toFixed(1)}M points ${loadStatus}<br>
+    ${cursorInfo ? `<span class="cursor">${cursorInfo}</span><br>` : ''}
+    <span class="keys">V vegetation · H height above ground · E shading · [ ] point size · drag orbit · right-drag pan</span>`;
+}
+
+// ---------- Terrain + cursor ----------
+let terrain = null;
+let sceneOffsetZ = 0; // UTM elevation of the scene origin, for readouts
+
+// Things drawn on top of the point cloud (after the EDL pass), so markers
+// stay crisp and visible. Later: trail lines, peaks/bases, lift cables.
+const overlay = new THREE.Scene();
+
+const cursor = new THREE.Mesh(
+  new THREE.RingGeometry(0.7, 1.0, 48),
+  new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthTest: false })
+);
+cursor.visible = false;
+overlay.add(cursor);
+
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+const hit = new THREE.Vector3();
+const normal = new THREE.Vector3();
+let pointerDirty = false;
+
+renderer.domElement.addEventListener('pointermove', (e) => {
+  pointer.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  pointerDirty = true;
+});
+renderer.domElement.addEventListener('pointerleave', () => {
+  cursor.visible = false;
+  cursorInfo = '';
+  updateHud();
+});
+
+// North American trail ratings by steepest typical pitch (rough guide).
+function difficulty(slope) {
+  if (slope < 0.25) return ['green', '#3ec46d'];
+  if (slope < 0.4) return ['blue', '#4c8dff'];
+  if (slope < 0.6) return ['black', '#e6e9ee'];
+  return ['double black', '#e6e9ee'];
+}
+
+function updateCursor() {
+  if (!terrain || !pointerDirty) return;
+  pointerDirty = false;
+  raycaster.setFromCamera(pointer, camera);
+  if (!terrain.raycast(raycaster.ray, hit)) {
+    cursor.visible = false;
+    cursorInfo = '';
+    updateHud();
+    return;
+  }
+  terrain.normalAt(hit.x, hit.y, normal);
+  cursor.position.copy(hit).addScaledVector(normal, 0.2);
+  cursor.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+  cursor.visible = true;
+
+  const slope = terrain.slopeAt(hit.x, hit.y);
+  const [rating, color] = difficulty(slope);
+  const elev = hit.z + sceneOffsetZ;
+  cursorInfo =
+    `${elev.toFixed(0)} m (${(elev * 3.28084).toFixed(0)} ft) · ` +
+    `slope ${(slope * 100).toFixed(0)}% (${THREE.MathUtils.radToDeg(Math.atan(slope)).toFixed(0)}°) · ` +
+    `<span style="color:${color}">${rating}</span>`;
+  updateHud();
+}
+
+// Keep the ring the same size on screen regardless of distance.
+function scaleCursor() {
+  if (!cursor.visible) return;
+  const dist = camera.position.distanceTo(cursor.position);
+  cursor.scale.setScalar(dist * 0.012);
 }
 
 // ---------- Loading ----------
@@ -178,6 +274,19 @@ async function load() {
   // large for 32-bit floats on the GPU and would make points jitter.
   const center = new THREE.Vector3((min[0] + max[0]) / 2, (min[1] + max[1]) / 2, min[2]);
   const zRange = max[2] - min[2];
+
+  sceneOffsetZ = center.z;
+
+  // Height map loads in parallel with the points.
+  Terrain.load(`${import.meta.env.BASE_URL}data/ascutney-height`, center)
+    .then((t) => {
+      terrain = t;
+      uniforms.uHeight.value = t.texture;
+      uniforms.uHeightOrigin.value.copy(t.origin);
+      uniforms.uHeightRes.value = t.res;
+      uniforms.uHasHeight.value = 1;
+    })
+    .catch((err) => console.error('height map failed to load', err));
 
   const size = Math.max(max[0] - min[0], max[1] - min[1]);
   camera.position.set(0, -size * 0.9, size * 0.6);
@@ -254,6 +363,7 @@ load().catch((err) => {
 // ---------- Input ----------
 addEventListener('keydown', (e) => {
   if (e.key === 'v' || e.key === 'V') uniforms.uShowVeg.value = 1 - uniforms.uShowVeg.value;
+  if (e.key === 'h' || e.key === 'H') uniforms.uColorMode.value = 1 - uniforms.uColorMode.value;
   if (e.key === ']') uniforms.uSize.value *= 1.2;
   if (e.key === '[') uniforms.uSize.value /= 1.2;
 });
@@ -277,6 +387,8 @@ renderer.domElement.addEventListener('pointerdown', () => renderer.domElement.fo
 
 renderer.setAnimationLoop(() => {
   controls.update();
+  updateCursor();
+  scaleCursor();
   if (edlOn) {
     renderer.setRenderTarget(sceneTarget);
     renderer.render(scene, camera);
@@ -285,4 +397,11 @@ renderer.setAnimationLoop(() => {
   } else {
     renderer.render(scene, camera);
   }
+  // Overlay on top, without clearing what's already drawn.
+  renderer.autoClear = false;
+  renderer.render(overlay, camera);
+  renderer.autoClear = true;
 });
+
+// Re-pick when the camera moves under a still mouse.
+controls.addEventListener('change', () => { pointerDirty = true; });

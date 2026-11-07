@@ -1,0 +1,11 @@
+{
+  "crs": "EPSG:32618",
+  "width": 1548,
+  "height": 1543,
+  "resolution": 2.0,
+  "originX": 704654.0,
+  "originY": 4811489.0,
+  "zMin": 324.0,
+  "zScale": 0.01,
+  "encoding": "R*256+G, row 0 = south"
+}

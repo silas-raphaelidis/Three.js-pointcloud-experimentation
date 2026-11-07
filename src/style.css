@@ -7,3 +7,4 @@ canvas { display: block; }
   background: rgba(14, 17, 22, 0.75); border-radius: 8px; pointer-events: none;
 }
 #hud .keys { color: #9aa3ad; font-size: 12px; }
+#hud .cursor { font-variant-numeric: tabular-nums; }

@@ -12,8 +12,10 @@ Public domain; no account needed.
 [PDAL](https://pdal.io) in a conda environment named `lidar`:
 
 ```bash
-conda create -n lidar -c conda-forge pdal
+conda create -n lidar -c conda-forge pdal gdal pillow
 ```
+
+(`gdal` and `pillow` are only needed for step 5.)
 
 The shell scripts call PDAL through `~/miniforge3/Scripts/conda.exe` (Miniforge on
 Windows). Adjust the `PDAL=` line at the top of each script if conda lives elsewhere.
@@ -28,6 +30,7 @@ Run everything from the repo root, in order.
 | 2 | `bash data-prep/02-process.sh` | Splits the crop into a 3 × 3 grid of tiles with 30 m overlap and runs `02-process-tile.json` on each: outlier removal, height above ground, and vegetation classes (3 = 0.5–2 m, 5 = over 2 m). Tiling keeps memory use low. | `raw/tiles/tile_*.laz` |
 | 3 | `pdal pipeline data-prep/03-dem.json --stream` | Grids ground points (class 2) into a 1 m bare-earth height map. | `raw/ascutney-dem-1m.tif` |
 | 4 | `bash data-prep/04-thin.sh [radius] [output]` | Thins each tile so no two points are closer than `radius` meters (default 1.4), zeroes fields the viewer doesn't use so they compress away, and merges into one COPC file. | `public/data/ascutney.copc.laz` |
+| 5 | `python data-prep/05-heightmap.py [resolution]` | Fills gaps in the height map, resamples it (default 2 m), and packs elevations as 16-bit values (1 cm steps) into the red and green channels of a PNG the browser can decode. | `public/data/ascutney-height.png` + `.json` (~3 MB) |
 
 Run step 1 inside the `lidar` environment (`conda activate lidar`), or prefix it
 with `conda run -n lidar`.
