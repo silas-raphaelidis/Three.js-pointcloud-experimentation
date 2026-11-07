@@ -14,8 +14,9 @@ const UNDO_LIMIT = 60;
  * that changes the network in response to input; the view just draws.
  *
  * Edit mode (T):
- *   click open terrain        start a trail; keep clicking to add points;
+ *   right-click terrain       "Start new trail here", then click to add points;
  *                             double-click or Enter to finish, Esc to cancel
+ *                             (a plain click on terrain only deselects)
  *   click a trail             select it
  *   click a selected trail    insert a point there (and drag it)
  *   drag a point              move it (junctions move every trail through them)
@@ -32,6 +33,7 @@ export class TrailEditor {
     Object.assign(this, { network, geometry, terrain, camera, dom, controls, view, onStatus });
     this.enabled = false;
     this.defaultWidth = 36;
+    this.pickHidden = false;   // true while hidden trails are ghosted (G)
     this.drawing = null;       // trail id being created
     this.selection = null;     // { trailId, index|null }
     this.drag = null;          // { type: 'node'|'width', ... }
@@ -129,7 +131,7 @@ export class TrailEditor {
       }
       return line;
     }
-    return `Click terrain to start a trail (${this.defaultWidth} m) · Shift-click a trail to branch`;
+    return `Right-click terrain to start a trail (${this.defaultWidth} m) · Shift-click or right-click a trail to branch`;
   }
 
   // ---------- Geometry helpers ----------
@@ -155,6 +157,17 @@ export class TrailEditor {
     ];
   }
 
+  /** Line of sight from the camera to a point on the ground (lifted like the overlay). */
+  #visible(p) {
+    const target = new THREE.Vector3(p.x, p.y, this.terrain.heightAt(p.x, p.y) + 1.5);
+    const from = this.camera.position;
+    const dist = from.distanceTo(target);
+    const ray = new THREE.Ray(from.clone(), target.clone().sub(from).normalize());
+    const hit = this.terrain.raycast(ray, new THREE.Vector3());
+    // Blocked only if the terrain is hit clearly before reaching the point.
+    return !hit || hit.distanceTo(from) > dist - 3;
+  }
+
   #toScreen(x, y) {
     const v = new THREE.Vector3(x, y, this.terrain.heightAt(x, y) + 1.5).project(this.camera);
     if (v.z > 1) return null; // behind the camera
@@ -169,9 +182,14 @@ export class TrailEditor {
 
   /** What's under the mouse: a width handle, a point, a trail, or terrain. */
   #pick(clientX, clientY) {
+    // Screen distance to a ground point, or Infinity if it's off screen or
+    // hidden behind terrain (unless hidden trails are ghosted, i.e. visible).
     const near = (p) => {
       const s = p && this.#toScreen(p.x, p.y);
-      return s ? Math.hypot(s.x - clientX, s.y - clientY) : Infinity;
+      if (!s) return Infinity;
+      const d = Math.hypot(s.x - clientX, s.y - clientY);
+      if (d >= PICK_PX || this.pickHidden) return d;
+      return this.#visible(p) ? d : Infinity;
     };
 
     // Points and width handles compete on screen distance, so zoomed out
@@ -470,10 +488,10 @@ export class TrailEditor {
     if (this.drawing) {
       if (isDouble) this.#finishDrawing();
       else this.#addDrawingPoint(target);
-    } else if (this.selection) {
-      this.selection = null; // click on open terrain deselects first
-    } else if (target.world) {
-      this.#startTrail({ x: target.world.x, y: target.world.y, width: this.defaultWidth });
+    } else {
+      // Click on open terrain just deselects. New trails start from the
+      // right-click menu or by branching, never by accident.
+      this.selection = null;
     }
     this.refresh();
   }

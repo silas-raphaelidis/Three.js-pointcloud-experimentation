@@ -597,7 +597,8 @@ help.innerHTML = `
     <tr><td>Home</td><td>Frame the whole mountain</td></tr>
     <tr><th colspan="2">Trails</th></tr>
     <tr><td>T</td><td>Edit trails on/off</td></tr>
-    <tr><td>Click terrain</td><td>Start a trail / add a point</td></tr>
+    <tr><td>Right-click terrain</td><td>Start a new trail</td></tr>
+    <tr><td>Click terrain (drawing)</td><td>Add a point</td></tr>
     <tr><td>Double-click / Enter</td><td>Finish the trail</td></tr>
     <tr><td>Right-click</td><td>Options for a point, trail or spot</td></tr>
     <tr><td>Drag a point / handle</td><td>Move it / change width</td></tr>
@@ -606,7 +607,7 @@ help.innerHTML = `
     <tr><td>Delete &middot; Ctrl+Z &middot; Esc</td><td>Remove point &middot; undo &middot; cancel</td></tr>
     <tr><th colspan="2">View</th></tr>
     <tr><td>V &middot; H &middot; E</td><td>Vegetation &middot; height above ground &middot; shading</td></tr>
-    <tr><td>G &middot; M</td><td>Ghost hidden trails &middot; ground surface</td></tr>
+    <tr><td>G &middot; M</td><td>Ghost hidden trails (and let them be picked) &middot; ground surface</td></tr>
     <tr><td>[ ]</td><td>Point size</td></tr>
   </table>
   <p>Press ? to close</p>`;
@@ -623,7 +624,11 @@ addEventListener('keydown', (e) => {
     case 'v': case 'V': uniforms.uShowVeg.value = 1 - uniforms.uShowVeg.value; break;
     case 'h': case 'H': uniforms.uColorMode.value = 1 - uniforms.uColorMode.value; break;
     case 'e': case 'E': edlOn = !edlOn; break;
-    case 'g': case 'G': ghostTrails = !ghostTrails; break;
+    case 'g': case 'G':
+      ghostTrails = !ghostTrails;
+      // Ghosted trails are visible, so they can be picked through terrain.
+      if (editor) editor.pickHidden = ghostTrails;
+      break;
     case 'm': case 'M': if (ground) ground.mesh.visible = !ground.mesh.visible; break;
     case ']': uniforms.uSize.value *= 1.2; break;
     case '[': uniforms.uSize.value /= 1.2; break;

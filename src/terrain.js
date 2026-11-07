@@ -71,9 +71,11 @@ export class Terrain {
     return this.heights[j * this.width + i];
   }
 
+  /** Is (x, y) over the map? Covers the full outer cells, matching the
+   *  bounding box raycast() clips to (cell centers sit half a cell in). */
   contains(x, y) {
     const [gx, gy] = this.#grid(x, y);
-    return gx >= 0 && gy >= 0 && gx <= this.width - 1 && gy <= this.height - 1;
+    return gx >= -0.5 && gy >= -0.5 && gx <= this.width - 0.5 && gy <= this.height - 0.5;
   }
 
   /** Bilinearly interpolated ground height at local x, y. */
