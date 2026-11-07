@@ -177,9 +177,15 @@ export class Terrain {
         this.maxZ + 1
       )
     );
-    const enter = new THREE.Vector3();
-    if (!ray.intersectBox(box, enter)) return null;
-    let t = Math.max(0, enter.sub(ray.origin).dot(ray.direction));
+    // Start where the ray enters the box, or at its origin if it starts
+    // inside (Ray.intersectBox returns the EXIT point in that case, which
+    // made every pick fail once the camera dropped below the summit).
+    let t = 0;
+    if (!box.containsPoint(ray.origin)) {
+      const enter = new THREE.Vector3();
+      if (!ray.intersectBox(box, enter)) return null;
+      t = Math.max(0, enter.sub(ray.origin).dot(ray.direction));
+    }
 
     const step = this.res * 0.5;
     const p = new THREE.Vector3();

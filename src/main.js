@@ -616,15 +616,43 @@ load().catch((err) => {
 // OrbitControls already turns an orbit drag into a pan when Shift is held.
 controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.ROTATE, RIGHT: null };
 controls.zoomToCursor = true;
+controls.minDistance = 2;
+
+// Keep the orbit center on the terrain surface. It's moved along the current
+// view line (so the view doesn't jump) to where that line meets the ground.
+// Otherwise it can sit deep inside the mountain, and zooming toward it drives
+// the camera straight through the terrain.
+const _viewRay = new THREE.Ray();
+const _surface = new THREE.Vector3();
+function retargetToSurface() {
+  if (!terrain || flight) return;
+  _viewRay.origin.copy(camera.position);
+  _viewRay.direction.copy(controls.target).sub(camera.position).normalize();
+  if (terrain.raycast(_viewRay, _surface)) controls.target.copy(_surface);
+}
+
 renderer.domElement.addEventListener(
   'pointerdown',
   (e) => {
+    retargetToSurface();
     if (e.button === 1) {
       controls.mouseButtons.MIDDLE = e.ctrlKey ? THREE.MOUSE.DOLLY : THREE.MOUSE.ROTATE;
     }
   },
   { capture: true }
 );
+renderer.domElement.addEventListener('wheel', retargetToSurface, { capture: true, passive: true });
+
+// Safety net: never let the camera go below the ground.
+const CAMERA_CLEARANCE = 2; // meters above the terrain
+function keepCameraAboveGround() {
+  if (!terrain) return;
+  const floor = terrain.heightAt(camera.position.x, camera.position.y) + CAMERA_CLEARANCE;
+  if (camera.position.z < floor) {
+    camera.position.z = floor;
+    camera.lookAt(controls.target);
+  }
+}
 // No browser menu or middle-click autoscroll on the 3D view.
 renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 renderer.domElement.addEventListener('mousedown', (e) => { if (e.button === 1) e.preventDefault(); });
@@ -911,6 +939,7 @@ renderer.setAnimationLoop(() => {
   if (!ready) return;
   updateFlight();
   controls.update();
+  keepCameraAboveGround();
   uniforms.uTime.value = clock.getElapsedTime();
   updateCursor();
   scaleCursor();
