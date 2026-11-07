@@ -89,11 +89,12 @@ function changed() {
 }
 
 /**
- * A trail is rated by the hardest level that covers at least this share of
- * its length (counting anything steeper too), not by its single steepest
- * spot. E.g. 0.1: double black only if >= 10 % of the trail is that steep.
+ * A trail is rated by its crux, like real runs: the hardest level that has a
+ * CONTINUOUS stretch at least this many meters long at that pitch or steeper.
+ * A mostly flat run with one 50 m double-black wall is double black; scattered
+ * short steep bumps (or a height-map glitch) don't count.
  */
-export const SIGNIFICANT_SHARE = 0.1;
+export const CRUX_MIN_LENGTH = 40;
 
 /** Rating for a slope: { name, color, text, index }. */
 export function rate(slope) {

@@ -1,4 +1,4 @@
-import { rate, RATINGS, SIGNIFICANT_SHARE } from '../difficulty.js';
+import { rate, RATINGS, CRUX_MIN_LENGTH } from '../difficulty.js';
 
 /**
  * Trail measurements from sampled geometry and the height map: length,
@@ -40,23 +40,32 @@ export function trailStats(samples, terrain, window = 30) {
     pitch[i] = ds > 0 ? Math.abs(z[hi] - z[lo]) / ds : 0;
   }
 
-  // Share of the trail's length in each difficulty band.
+  // Band of each segment, and the share of the trail's length in each band
+  // (for the breakdown bar).
   const shares = [0, 0, 0, 0];
+  const segBand = new Uint8Array(n);
   let maxPitch = 0;
   for (let i = 1; i < n; i++) {
     const p = (pitch[i - 1] + pitch[i]) / 2;
-    shares[rate(p).index] += s[i] - s[i - 1];
+    segBand[i] = rate(p).index;
+    shares[segBand[i]] += s[i] - s[i - 1];
     if (p > maxPitch) maxPitch = p;
   }
   for (let b = 0; b < 4; b++) shares[b] = run > 0 ? shares[b] / run : 0;
 
-  // Overall rating: the hardest band where that band plus anything steeper
-  // covers at least SIGNIFICANT_SHARE of the trail.
+  // Overall rating: the crux. The hardest band with a continuous stretch at
+  // least CRUX_MIN_LENGTH long at that band or steeper (a trail shorter than
+  // that only needs to be that steep along its whole length).
+  const needed = Math.min(CRUX_MIN_LENGTH, run);
   let index = 0;
-  let atLeast = 0;
-  for (let b = 3; b >= 0; b--) {
-    atLeast += shares[b];
-    if (atLeast >= SIGNIFICANT_SHARE) { index = b; break; }
+  let cruxLength = run;
+  for (let b = 3; b >= 1; b--) {
+    let stretch = 0, longest = 0;
+    for (let i = 1; i < n; i++) {
+      stretch = segBand[i] >= b ? stretch + (s[i] - s[i - 1]) : 0;
+      if (stretch > longest) longest = stretch;
+    }
+    if (longest >= needed - 1e-6) { index = b; cruxLength = longest; break; }
   }
   const r = RATINGS[index];
 
@@ -66,6 +75,7 @@ export function trailStats(samples, terrain, window = 30) {
     averageSlope: run > 0 ? vertical / run : 0,
     maxSustained: maxPitch,
     shares,
-    rating: { index, name: r.name, color: r.text, mapColor: r.color },
+    // cruxLength: the longest continuous stretch at the rated level or steeper.
+    rating: { index, name: r.name, color: r.text, mapColor: r.color, cruxLength },
   };
 }
