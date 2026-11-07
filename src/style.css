@@ -51,3 +51,21 @@ canvas { display: block; }
   background: #0e1116; border: 1px solid #2f3746; border-radius: 4px;
 }
 .context-menu .field input[type=number] { max-width: 64px; }
+
+#loading {
+  position: fixed; inset: 0; z-index: 20; display: grid; place-items: center;
+  background: #0e1116; transition: opacity 0.45s ease;
+  font: 14px/1.5 system-ui, sans-serif; color: #e6e9ee;
+}
+#loading.done { opacity: 0; pointer-events: none; }
+#loading .card { width: min(360px, calc(100vw - 32px)); text-align: center; }
+#loading h1 { margin: 0 0 18px; font-size: 20px; font-weight: 600; letter-spacing: 0.02em; }
+#loading .bar { height: 4px; border-radius: 2px; background: #1f2530; overflow: hidden; }
+#loading .fill { height: 100%; width: 0; background: #9fd3ff; transition: width 0.2s ease; }
+#loading .status { margin-top: 12px; font-variant-numeric: tabular-nums; }
+#loading .detail { margin-top: 2px; color: #9aa3ad; font-size: 12px; min-height: 18px; }
+#loading.failed .fill { background: #ff8a80; }
+#loading button {
+  margin-top: 16px; padding: 6px 16px; font: inherit; color: #0e1116;
+  background: #9fd3ff; border: 0; border-radius: 6px; cursor: pointer;
+}

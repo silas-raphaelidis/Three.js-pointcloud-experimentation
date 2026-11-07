@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { fetchWithRetry } from './retry.js';
 
 /**
  * Bare-earth height map: decoded from the packed PNG written by
@@ -15,8 +16,8 @@ export class Terrain {
    */
   static async load(baseUrl, offset) {
     const [meta, bitmap] = await Promise.all([
-      fetch(`${baseUrl}.json`).then((r) => r.json()),
-      fetch(`${baseUrl}.png`)
+      fetchWithRetry(`${baseUrl}.json`, 'height map metadata').then((r) => r.json()),
+      fetchWithRetry(`${baseUrl}.png`, 'height map image')
         .then((r) => r.blob())
         // Decode the bytes exactly as stored: no color management, no alpha games.
         .then((b) => createImageBitmap(b, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' })),

@@ -12,6 +12,8 @@ import { TrailView } from './trails/view.js';
 import { TrailEditor } from './trails/editor.js';
 import { difficulty } from './trails/stats.js';
 import { GroundMesh } from './ground.js';
+import { withRetry } from './retry.js';
+import { LoadingScreen } from './loading.js';
 
 // Which file to load: ?file=ascutney-1.4m.copc.laz to compare thinning levels.
 const params = new URLSearchParams(location.search);
@@ -372,7 +374,8 @@ function setupTrails(t) {
   });
   uniforms.uTrail.value = trailMask.texture;
   uniforms.uHasTrail.value = 1;
-  loadSavedTrails();
+  // Saved trails are loaded after the loading screen fades, so their
+  // cut-into-the-forest animation is actually seen.
 }
 
 async function loadSavedTrails() {
@@ -410,35 +413,27 @@ window.trails = { network, get editor() { return editor; } };
 
 
 // ---------- Loading ----------
+// Everything loads behind a loading screen; the scene is revealed only once
+// the points, height map and ground mesh are ready. Every download retries
+// (see retry.js) and failures are logged with what failed.
+const loading = new LoadingScreen('Mount Ascutney');
+let ready = false;
+
 async function load() {
-  const lazPerf = await createLazPerf({ locateFile: () => lazPerfWasmUrl });
-  const copc = await Copc.create(FILE_URL);
+  loading.update(0.02, 'Preparing the LAZ decoder…');
+  const lazPerf = await withRetry(() => createLazPerf({ locateFile: () => lazPerfWasmUrl }), 'LAZ decoder');
+
+  loading.update(0.04, 'Reading the point cloud header…');
+  const copc = await withRetry(() => Copc.create(FILE_URL), 'point cloud header');
   const { min, max } = copc.header;
   totalPoints = copc.header.pointCount;
-  updateHud('· reading hierarchy…');
 
   // Center the data at the origin: raw UTM coordinates (~700,000 m) are too
   // large for 32-bit floats on the GPU and would make points jitter.
   const center = new THREE.Vector3((min[0] + max[0]) / 2, (min[1] + max[1]) / 2, min[2]);
   const zRange = max[2] - min[2];
   uniforms.uZRange.value = zRange;
-
   sceneOffsetZ = center.z;
-
-  // Height map loads in parallel with the points.
-  Terrain.load(`${import.meta.env.BASE_URL}data/ascutney-height`, center)
-    .then((t) => {
-      terrain = t;
-      uniforms.uHeight.value = t.texture;
-      uniforms.uHeightOrigin.value.copy(t.origin);
-      uniforms.uHeightRes.value = t.res;
-      uniforms.uHasHeight.value = 1;
-      ground = new GroundMesh(t, uniforms, { step: 2, sink: 0.5, colorGLSL: groundRampGLSL });
-      scene.add(ground.mesh);
-      occluderScene.add(ground.occluder);
-      setupTrails(t);
-    })
-    .catch((err) => console.error('height map failed to load', err));
 
   const size = Math.max(max[0] - min[0], max[1] - min[1]);
   camera.position.set(0, -size * 0.9, size * 0.6);
@@ -448,23 +443,50 @@ async function load() {
   edlUniforms.uFar.value = camera.far;
   homeView = { position: camera.position.clone(), target: controls.target.clone() };
 
-  // Walk every hierarchy page to collect all nodes.
+  // Progress: points are most of the work; the height map is the rest.
+  let heightReady = false;
+  const progress = () => {
+    const pts = totalPoints ? loadedPoints / totalPoints : 0;
+    loading.update(
+      0.08 + 0.8 * pts + (heightReady ? 0.1 : 0),
+      `Loading points · ${(loadedPoints / 1e6).toFixed(1)}M of ${(totalPoints / 1e6).toFixed(1)}M`,
+      heightReady ? 'Height map ready' : 'Loading height map…'
+    );
+  };
+
+  // Height map (and everything built on it) loads in parallel with the points.
+  const heightLoad = Terrain.load(`${import.meta.env.BASE_URL}data/ascutney-height`, center).then((t) => {
+    terrain = t;
+    uniforms.uHeight.value = t.texture;
+    uniforms.uHeightOrigin.value.copy(t.origin);
+    uniforms.uHeightRes.value = t.res;
+    uniforms.uHasHeight.value = 1;
+    ground = new GroundMesh(t, uniforms, { step: 2, sink: 0.5, colorGLSL: groundRampGLSL });
+    scene.add(ground.mesh);
+    occluderScene.add(ground.occluder);
+    setupTrails(t);
+    heightReady = true;
+    progress();
+  });
+
+  // Walk every hierarchy page to collect all chunks (octree nodes).
+  loading.update(0.06, 'Reading the point index…');
   const nodes = {};
-  const pending = [copc.info.rootHierarchyPage];
-  while (pending.length) {
-    const page = pending.pop();
-    const sub = await Copc.loadHierarchyPage(FILE_URL, page);
+  const pages = [copc.info.rootHierarchyPage];
+  while (pages.length) {
+    const page = pages.pop();
+    const sub = await withRetry(() => Copc.loadHierarchyPage(FILE_URL, page), `index page @${page.pageOffset}`);
     Object.assign(nodes, sub.nodes);
-    pending.push(...Object.values(sub.pages));
+    pages.push(...Object.values(sub.pages));
   }
 
-  // Coarse levels first so the mountain appears quickly, then detail fills in.
+  // Coarse levels first, then detail.
   const keys = Object.keys(nodes)
     .filter((k) => nodes[k].pointCount > 0)
     .sort((a, b) => Number(a.split('-')[0]) - Number(b.split('-')[0]));
 
   const tmp = new THREE.Color();
-  async function loadNode(key) {
+  async function loadChunk(key) {
     const node = nodes[key];
     const view = await Copc.loadPointDataView(FILE_URL, copc, node, {
       lazPerf,
@@ -495,23 +517,57 @@ async function load() {
     geom.setAttribute('cls', new THREE.BufferAttribute(cls, 1));
     scene.add(new THREE.Points(geom, material));
     loadedPoints += n;
-    updateHud();
+    progress();
   }
 
-  // Load a few nodes at a time.
+  // Six chunks at a time. A chunk that still fails after its retries is
+  // recorded and skipped; it doesn't stop the others.
+  const failed = [];
   const queue = [...keys];
-  const workers = Array.from({ length: 6 }, async () => {
-    while (queue.length) await loadNode(queue.shift());
-  });
   const t0 = performance.now();
-  await Promise.all(workers);
-  updateHud(`· loaded in ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+  await Promise.all(
+    Array.from({ length: 6 }, async () => {
+      while (queue.length) {
+        const key = queue.shift();
+        try {
+          await withRetry(() => loadChunk(key), `chunk ${key}`);
+        } catch {
+          failed.push(key);
+        }
+      }
+    })
+  );
+  await heightLoad; // a height map failure is fatal: the scene depends on it
+
+  if (failed.length) {
+    const missing = failed.reduce((s, k) => s + nodes[k].pointCount, 0);
+    console.error(`[load] ${failed.length} chunk(s) failed after retries (${missing} points missing):`, failed);
+  }
+
+  // Upload everything to the GPU and compile shaders behind the loading
+  // screen, so the reveal doesn't stall.
+  loading.update(0.98, 'Preparing the view…');
+  renderer.setRenderTarget(sceneTarget);
+  renderer.render(scene, camera);
+  renderer.setRenderTarget(null);
+  await new Promise((r) => requestAnimationFrame(r));
+
+  const seconds = ((performance.now() - t0) / 1000).toFixed(1);
+  updateHud(
+    failed.length
+      ? `· loaded in ${seconds}s · <span style="color:#ffd34d">${failed.length} chunk${failed.length > 1 ? 's' : ''} failed (see console)</span>`
+      : `· loaded in ${seconds}s`
+  );
+  ready = true;
+  await loading.hide();
+  loadSavedTrails();
 }
 
 load().catch((err) => {
-  console.error(err);
-  updateHud(`· <span style="color:#f77">failed: ${err.message}</span>`);
+  console.error('[load] fatal:', err);
+  loading.fail(err?.message ?? String(err));
 });
+
 
 // ---------- Camera controls (Blender-style) ----------
 //   left-drag / middle-drag  orbit        Alt+left-drag      orbit (trackpads)
@@ -717,6 +773,8 @@ function renderOverlay() {
 
 renderer.setAnimationLoop(() => {
   tickFps();
+  // Nothing is shown until loading finishes; the loading screen covers the page.
+  if (!ready) return;
   updateFlight();
   controls.update();
   uniforms.uTime.value = clock.getElapsedTime();
