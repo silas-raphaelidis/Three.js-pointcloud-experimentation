@@ -4,7 +4,13 @@ import { Copc } from 'copc';
 import { createLazPerf } from 'laz-perf';
 import lazPerfWasmUrl from 'laz-perf/lib/web/laz-perf.wasm?url';
 import { Terrain, terrainGLSL } from './terrain.js';
-import { TrailMask, trailGLSL } from './trails.js';
+import { TrailMask, trailGLSL } from './trails/mask.js';
+import { TrailNetwork } from './trails/network.js';
+import { TrailGeometry } from './trails/spline.js';
+import { TrailRasterizer } from './trails/rasterize.js';
+import { TrailView } from './trails/view.js';
+import { TrailEditor } from './trails/editor.js';
+import { difficulty } from './trails/stats.js';
 
 // Which file to load: ?file=ascutney-1.4m.copc.laz to compare thinning levels.
 const params = new URLSearchParams(location.search);
@@ -226,32 +232,25 @@ let loadedPoints = 0;
 let totalPoints = 0;
 let loadStatus = '';
 let cursorInfo = '';
+let editorStatus = '';
 function updateHud(extra) {
   if (extra !== undefined) loadStatus = extra;
+  const editing = editor?.enabled;
   hud.innerHTML = `
     <strong>${decodeURIComponent(FILE.split('/').pop())}</strong><br>
     ${(loadedPoints / 1e6).toFixed(1)}M / ${(totalPoints / 1e6).toFixed(1)}M points ${loadStatus}<br>
     ${cursorInfo ? `<span class="cursor">${cursorInfo}</span><br>` : ''}
-    <span class="keys">${paintMode ? '<b style="color:#9fd3ff">Trail mode on</b> · drag' : 'Shift-drag or T'} to cut a trail (${trailWidth} m · − = width · R regrow)</span><br>
-    <span class="keys">V vegetation · H height above ground · E shading · [ ] point size · drag orbit · right-drag pan</span>`;
+    ${editing ? `<div class="editor"><b style="color:#9fd3ff">Editing trails</b> · T to stop · Ctrl+Z undo<br>${editorStatus}</div>` : ''}
+    <span class="keys">T edit trails · V vegetation · H height above ground · E shading · [ ] point size · drag orbit · right-drag pan</span>`;
 }
 
 // ---------- Terrain + cursor ----------
 let terrain = null;
 let sceneOffsetZ = 0; // UTM elevation of the scene origin, for readouts
-
-// ---------- Trail painting ----------
-let trailMask = null;
-let trailWidth = 36;        // meters; real ski trails run ~30–60 m
-const TRAIL_FEATHER = 8;    // soft tree line on each side, meters
 const clock = new THREE.Clock();
-let painting = false;
-let shiftHeld = false;
-let paintMode = false;      // T toggles: plain drag paints (handy on trackpads)
-const lastPaint = new THREE.Vector3();
-let hasLastPaint = false;
+
 // Things drawn on top of the point cloud (after the EDL pass), so markers
-// stay crisp and visible. Later: trail lines, peaks/bases, lift cables.
+// stay crisp and visible: the cursor, trail lines, points and handles.
 const overlay = new THREE.Scene();
 
 const cursor = new THREE.Mesh(
@@ -277,14 +276,6 @@ renderer.domElement.addEventListener('pointerleave', () => {
   updateHud();
 });
 
-// North American trail ratings by steepest typical pitch (rough guide).
-function difficulty(slope) {
-  if (slope < 0.25) return ['green', '#3ec46d'];
-  if (slope < 0.4) return ['blue', '#4c8dff'];
-  if (slope < 0.6) return ['black', '#e6e9ee'];
-  return ['double black', '#e6e9ee'];
-}
-
 function updateCursor() {
   if (!terrain || !pointerDirty) return;
   pointerDirty = false;
@@ -299,72 +290,90 @@ function updateCursor() {
   cursor.position.copy(hit).addScaledVector(normal, 0.2);
   cursor.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
   cursor.visible = true;
-  if (painting) paintTo(hit);
 
   const slope = terrain.slopeAt(hit.x, hit.y);
-  const [rating, color] = difficulty(slope);
+  const rating = difficulty(slope);
   const elev = hit.z + sceneOffsetZ;
   cursorInfo =
     `${elev.toFixed(0)} m (${(elev * 3.28084).toFixed(0)} ft) · ` +
     `slope ${(slope * 100).toFixed(0)}% (${THREE.MathUtils.radToDeg(Math.atan(slope)).toFixed(0)}°) · ` +
-    `<span style="color:${color}">${rating}</span>`;
+    `<span style="color:${rating.color}">${rating.name}</span>`;
   updateHud();
 }
 
-// Keep the ring the same size on screen regardless of distance; while Shift
-// is held it shows the real brush footprint instead.
+// Keep the ring the same size on screen regardless of distance.
 function scaleCursor() {
   if (!cursor.visible) return;
-  if (shiftHeld || painting || paintMode) {
-    cursor.scale.setScalar(trailWidth / 2);
-    cursor.material.color.set(0x9fd3ff);
-  } else {
-    const dist = camera.position.distanceTo(cursor.position);
-    cursor.scale.setScalar(dist * 0.012);
-    cursor.material.color.set(0xffffff);
-  }
+  const dist = camera.position.distanceTo(cursor.position);
+  cursor.scale.setScalar(dist * 0.012);
 }
 
-function paintTo(p) {
-  if (!trailMask) return;
-  const now = clock.getElapsedTime();
-  if (hasLastPaint) {
-    trailMask.paintSegment(lastPaint.x, lastPaint.y, p.x, p.y, trailWidth, TRAIL_FEATHER, now);
-  } else {
-    trailMask.paintSegment(p.x, p.y, p.x, p.y, trailWidth, TRAIL_FEATHER, now);
-  }
-  lastPaint.copy(p);
-  hasLastPaint = true;
-}
+// ---------- Trails ----------
+// Data (network) -> sampled splines (geometry) -> forest mask (rasterizer)
+// and overlay drawing (view). The editor is the only thing that edits.
+const TRAIL_FEATHER = 8; // soft tree line on each side, meters
+const SAVE_KEY = 'ascutney-trails-v1';
+const network = new TrailNetwork();
+let geometry = null;
+let trailMask = null;
+let rasterizer = null;
+let trailView = null;
+let editor = null;
+const pendingTrails = new Set();
+let saveTimer = 0;
 
-// Capture phase so Shift-drag reaches us before OrbitControls (which would
-// otherwise treat Shift-drag as a pan).
-renderer.domElement.addEventListener(
-  'pointerdown',
-  (e) => {
-    if (!(e.shiftKey || paintMode) || e.button !== 0 || !terrain) return;
-    e.stopImmediatePropagation();
-    e.preventDefault();
-    try { renderer.domElement.setPointerCapture(e.pointerId); } catch { /* synthetic events */ }
-    painting = true;
-    hasLastPaint = false;
-    controls.enabled = false;
-    // Start the stroke exactly where the button went down.
-    pointer.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
-    pointerDirty = true;
-    updateCursor();
-  },
-  { capture: true }
-);
-renderer.domElement.addEventListener('pointerup', (e) => {
-  if (!painting) return;
-  painting = false;
-  controls.enabled = true;
-  try { renderer.domElement.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
+network.addEventListener('change', (e) => {
+  for (const id of e.detail.trails) pendingTrails.add(id);
 });
-addEventListener('keydown', (e) => { if (e.key === 'Shift') shiftHeld = true; });
-addEventListener('keyup', (e) => { if (e.key === 'Shift') shiftHeld = false; });
-addEventListener('blur', () => { shiftHeld = false; });
+
+function setupTrails(t) {
+  geometry = new TrailGeometry(network, TRAIL_FEATHER);
+  trailMask = new TrailMask(t);
+  rasterizer = new TrailRasterizer(geometry, trailMask);
+  trailView = new TrailView(network, geometry, t, overlay);
+  trailView.setResolution(innerWidth, innerHeight);
+  editor = new TrailEditor({
+    network, geometry, terrain: t, camera, dom: renderer.domElement, controls, view: trailView,
+    onStatus: (s) => { editorStatus = s; updateHud(); },
+  });
+  uniforms.uTrail.value = trailMask.texture;
+  uniforms.uHasTrail.value = 1;
+  loadSavedTrails();
+}
+
+async function loadSavedTrails() {
+  try {
+    const saved = localStorage.getItem(SAVE_KEY);
+    if (saved) { network.load(JSON.parse(saved)); return; }
+  } catch { /* storage blocked or bad data: fall through to the preset */ }
+  try {
+    const res = await fetch(`${import.meta.env.BASE_URL}data/preset-trails.json`);
+    if (res.ok) network.load(await res.json());
+  } catch { /* no preset: start empty */ }
+}
+
+function saveTrailsSoon() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify(network.toJSON())); } catch { /* ignore */ }
+  }, 400);
+}
+
+/** Apply network edits once per frame: resample, re-cut, redraw, save. */
+function processTrails() {
+  if (!pendingTrails.size || !geometry) return;
+  const ids = [...pendingTrails];
+  pendingTrails.clear();
+  const box = geometry.update(ids);
+  rasterizer.rebuild(box, clock.getElapsedTime());
+  trailView.update(ids);
+  editor.refresh();
+  saveTrailsSoon();
+}
+
+// Debug/console access, e.g. copy(JSON.stringify(trails.network.toJSON()))
+window.trails = { network, get editor() { return editor; } };
+
 
 // ---------- Loading ----------
 async function load() {
@@ -389,9 +398,7 @@ async function load() {
       uniforms.uHeightOrigin.value.copy(t.origin);
       uniforms.uHeightRes.value = t.res;
       uniforms.uHasHeight.value = 1;
-      trailMask = new TrailMask(t);
-      uniforms.uTrail.value = trailMask.texture;
-      uniforms.uHasTrail.value = 1;
+      setupTrails(t);
     })
     .catch((err) => console.error('height map failed to load', err));
 
@@ -471,10 +478,6 @@ load().catch((err) => {
 addEventListener('keydown', (e) => {
   if (e.key === 'v' || e.key === 'V') uniforms.uShowVeg.value = 1 - uniforms.uShowVeg.value;
   if (e.key === 'h' || e.key === 'H') uniforms.uColorMode.value = 1 - uniforms.uColorMode.value;
-  if (e.key === 'r' || e.key === 'R') trailMask?.clear();
-  if (e.key === 't' || e.key === 'T') { paintMode = !paintMode; updateHud(); }
-  if (e.key === '-' || e.key === '_') { trailWidth = Math.max(10, trailWidth - 4); updateHud(); }
-  if (e.key === '=' || e.key === '+') { trailWidth = Math.min(90, trailWidth + 4); updateHud(); }
   if (e.key === ']') uniforms.uSize.value *= 1.2;
   if (e.key === '[') uniforms.uSize.value /= 1.2;
 });
@@ -485,6 +488,7 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
   resizeTargets();
   updateProjScale();
+  trailView?.setResolution(innerWidth, innerHeight);
 });
 updateProjScale();
 updateHud();
@@ -501,6 +505,7 @@ renderer.setAnimationLoop(() => {
   uniforms.uTime.value = clock.getElapsedTime();
   updateCursor();
   scaleCursor();
+  processTrails();
   trailMask?.flush();
   if (edlOn) {
     renderer.setRenderTarget(sceneTarget);

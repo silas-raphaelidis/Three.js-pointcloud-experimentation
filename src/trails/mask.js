@@ -12,12 +12,11 @@ const NEVER = 1e9;
  *   B  spare (e.g. difficulty or trail id later)
  *   A  spare
  *
- * Painting only re-uploads the rows that changed.
+ * Only rows that change are re-uploaded to the GPU.
  */
 export class TrailMask {
-  /** @param {import('./terrain.js').Terrain} terrain */
+  /** @param {import('../terrain.js').Terrain} terrain */
   constructor(terrain) {
-    this.terrain = terrain;
     this.width = terrain.width;
     this.height = terrain.height;
     this.res = terrain.res;
@@ -26,56 +25,46 @@ export class TrailMask {
     this.data = new Float32Array(this.width * this.height * 4);
     this.texture = new THREE.DataTexture(this.data, this.width, this.height, THREE.RGBAFormat, THREE.FloatType);
     this.texture.minFilter = this.texture.magFilter = THREE.NearestFilter;
-    this.clear();
+    for (let k = 0; k < this.data.length; k += 4) this.data[k + 1] = NEVER;
+    this.texture.needsUpdate = true;
 
-    this.dirty = null; // {i0, i1, j0, j1} cell rectangle awaiting upload
+    this.dirty = null; // cell rectangle awaiting upload
   }
 
-  /** Remove every trail (the forest grows back). */
-  clear() {
-    for (let k = 0; k < this.data.length; k += 4) {
-      this.data[k] = 0;
-      this.data[k + 1] = NEVER;
-    }
-    this.texture.clearUpdateRanges();
-    this.texture.needsUpdate = true;
-    this.dirty = null;
+  /** Cell rectangle covering a world-space box, clamped to the grid. */
+  cellsForBox({ minX, minY, maxX, maxY }) {
+    const i0 = Math.max(0, Math.floor((minX - this.origin.x) / this.res - 0.5));
+    const i1 = Math.min(this.width - 1, Math.ceil((maxX - this.origin.x) / this.res - 0.5));
+    const j0 = Math.max(0, Math.floor((minY - this.origin.y) / this.res - 0.5));
+    const j1 = Math.min(this.height - 1, Math.ceil((maxY - this.origin.y) / this.res - 0.5));
+    return i0 > i1 || j0 > j1 ? null : { i0, i1, j0, j1 };
   }
 
   /**
-   * Paint a trail segment from a to b (local x, y).
-   * @param {number} width   cleared width in meters
-   * @param {number} feather soft edge on each side in meters
-   * @param {number} time    cut time to record (seconds)
+   * Stamp a segment from a to b whose cleared width tapers from wa to wb,
+   * with a soft `feather` edge. Only cells inside `clip` are touched.
    */
-  paintSegment(ax, ay, bx, by, width, feather, time) {
-    const inner = width / 2;
-    const outer = inner + feather;
-    const r = outer / this.res;
-
-    // Cell rectangle covering the segment plus brush radius.
+  paintSegment(ax, ay, bx, by, wa, wb, feather, time, clip) {
+    const r = (Math.max(wa, wb) / 2 + feather) / this.res;
     const toI = (x) => (x - this.origin.x) / this.res - 0.5;
     const toJ = (y) => (y - this.origin.y) / this.res - 0.5;
-    const i0 = Math.max(0, Math.floor(Math.min(toI(ax), toI(bx)) - r));
-    const i1 = Math.min(this.width - 1, Math.ceil(Math.max(toI(ax), toI(bx)) + r));
-    const j0 = Math.max(0, Math.floor(Math.min(toJ(ay), toJ(by)) - r));
-    const j1 = Math.min(this.height - 1, Math.ceil(Math.max(toJ(ay), toJ(by)) + r));
+    const i0 = Math.max(clip.i0, Math.floor(Math.min(toI(ax), toI(bx)) - r));
+    const i1 = Math.min(clip.i1, Math.ceil(Math.max(toI(ax), toI(bx)) + r));
+    const j0 = Math.max(clip.j0, Math.floor(Math.min(toJ(ay), toJ(by)) - r));
+    const j1 = Math.min(clip.j1, Math.ceil(Math.max(toJ(ay), toJ(by)) + r));
     if (i0 > i1 || j0 > j1) return;
 
     const dx = bx - ax, dy = by - ay;
     const len2 = dx * dx + dy * dy;
-
     for (let j = j0; j <= j1; j++) {
       const y = this.origin.y + (j + 0.5) * this.res;
       for (let i = i0; i <= i1; i++) {
         const x = this.origin.x + (i + 0.5) * this.res;
-        // Distance from the cell center to the segment.
         let t = len2 > 0 ? ((x - ax) * dx + (y - ay) * dy) / len2 : 0;
         t = Math.min(1, Math.max(0, t));
         const d = Math.hypot(x - (ax + t * dx), y - (ay + t * dy));
-        if (d >= outer) continue;
-
-        // Smooth falloff across the feather band.
+        const inner = (wa + (wb - wa) * t) / 2;
+        if (d >= inner + feather) continue;
         const e = d <= inner ? 1 : 1 - (d - inner) / feather;
         const s = e * e * (3 - 2 * e);
         const k = (j * this.width + i) * 4;
@@ -83,7 +72,42 @@ export class TrailMask {
         if (time < this.data[k + 1]) this.data[k + 1] = time;
       }
     }
+  }
 
+  /**
+   * Redraw one region from scratch. `paint(clip)` must stamp every trail that
+   * overlaps it (with time = now). Cells that were already cleared keep their
+   * original cut time, so editing a trail doesn't replay its whole animation;
+   * newly cleared cells animate from `now`; uncleared cells grow back.
+   */
+  rebuildRegion(clip, now, paint) {
+    const { i0, i1, j0, j1 } = clip;
+    const w = i1 - i0 + 1;
+    const oldS = new Float32Array(w * (j1 - j0 + 1));
+    const oldT = new Float32Array(oldS.length);
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        const k = (j * this.width + i) * 4, o = (j - j0) * w + (i - i0);
+        oldS[o] = this.data[k];
+        oldT[o] = this.data[k + 1];
+        this.data[k] = 0;
+        this.data[k + 1] = NEVER;
+      }
+    }
+
+    paint(clip);
+
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        const k = (j * this.width + i) * 4, o = (j - j0) * w + (i - i0);
+        if (this.data[k] <= 0) this.data[k + 1] = NEVER;
+        else if (oldS[o] > 0) this.data[k + 1] = Math.min(oldT[o], now);
+      }
+    }
+    this.#markDirty(clip);
+  }
+
+  #markDirty({ i0, i1, j0, j1 }) {
     const d = this.dirty;
     this.dirty = d
       ? { i0: Math.min(d.i0, i0), i1: Math.max(d.i1, i1), j0: Math.min(d.j0, j0), j1: Math.max(d.j1, j1) }

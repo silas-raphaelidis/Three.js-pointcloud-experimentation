@@ -8,3 +8,7 @@ canvas { display: block; }
 }
 #hud .keys { color: #9aa3ad; font-size: 12px; }
 #hud .cursor { font-variant-numeric: tabular-nums; }
+#hud .editor {
+  margin: 4px 0; padding: 6px 8px; border-left: 2px solid #9fd3ff;
+  background: rgba(159, 211, 255, 0.08); max-width: 560px;
+}
