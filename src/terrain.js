@@ -59,6 +59,54 @@ export class Terrain {
     this.texture = new THREE.DataTexture(heights, this.width, this.height, THREE.RedFormat, THREE.FloatType);
     this.texture.minFilter = this.texture.magFilter = THREE.NearestFilter;
     this.texture.needsUpdate = true;
+
+    // Smoothed slope (rise/run) per cell, for difficulty ratings: ratings are
+    // about sustained pitch, so single rocks and bumps shouldn't flip a cell.
+    this.slopes = Terrain.#smoothedSlopes(heights, this.width, this.height, this.res, 10);
+    this.slopeTexture = new THREE.DataTexture(this.slopes, this.width, this.height, THREE.RedFormat, THREE.FloatType);
+    this.slopeTexture.minFilter = this.slopeTexture.magFilter = THREE.NearestFilter;
+    this.slopeTexture.needsUpdate = true;
+  }
+
+  /** Box-blur heights over ~`span` meters, then central-difference slope. */
+  static #smoothedSlopes(heights, w, h, res, span) {
+    const r = Math.max(1, Math.round(span / res / 2)); // blur radius in cells
+    const blur = (src, horizontal) => {
+      const out = new Float32Array(src.length);
+      const n = horizontal ? w : h;
+      const lines = horizontal ? h : w;
+      for (let l = 0; l < lines; l++) {
+        const idx = (k) => (horizontal ? l * w + k : k * w + l);
+        // Running sum with clamped edges.
+        let sum = 0;
+        for (let k = -r; k <= r; k++) sum += src[idx(Math.min(n - 1, Math.max(0, k)))];
+        for (let k = 0; k < n; k++) {
+          out[idx(k)] = sum / (2 * r + 1);
+          sum += src[idx(Math.min(n - 1, k + r + 1))] - src[idx(Math.max(0, k - r))];
+        }
+      }
+      return out;
+    };
+    const smooth = blur(blur(heights, true), false);
+    const at = (i, j) => smooth[Math.min(h - 1, Math.max(0, j)) * w + Math.min(w - 1, Math.max(0, i))];
+    const slopes = new Float32Array(w * h);
+    for (let j = 0; j < h; j++) {
+      for (let i = 0; i < w; i++) {
+        const dzdx = (at(i + 1, j) - at(i - 1, j)) / (2 * res);
+        const dzdy = (at(i, j + 1) - at(i, j - 1)) / (2 * res);
+        slopes[j * w + i] = Math.hypot(dzdx, dzdy);
+      }
+    }
+    return slopes;
+  }
+
+  /** Smoothed slope (rise/run) at local x, y, the value difficulty uses. */
+  smoothSlopeAt(x, y) {
+    const [gx, gy] = this.#grid(x, y);
+    const i = Math.floor(gx), j = Math.floor(gy);
+    const fx = gx - i, fy = gy - j;
+    const s = (a, b) => this.slopes[Math.min(this.height - 1, Math.max(0, b)) * this.width + Math.min(this.width - 1, Math.max(0, a))];
+    return (s(i, j) * (1 - fx) + s(i + 1, j) * fx) * (1 - fy) + (s(i, j + 1) * (1 - fx) + s(i + 1, j + 1) * fx) * fy;
   }
 
   /** Grid-space coordinates (cell centers at integers) for a local x, y. */

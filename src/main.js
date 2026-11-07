@@ -15,6 +15,13 @@ import { GroundMesh } from './ground.js';
 import { withRetry } from './retry.js';
 import { LoadingScreen } from './loading.js';
 import { MenuBar } from './menubar.js';
+import {
+  difficultyGLSL,
+  difficultyUniforms,
+  bindUniforms as bindDifficultyUniforms,
+  onThresholdsChange,
+  DifficultyLegend,
+} from './difficulty.js';
 
 // Which file to load: ?file=ascutney-1.4m.copc.laz to compare thinning levels.
 const params = new URLSearchParams(location.search);
@@ -46,7 +53,7 @@ const uniforms = {
   uSize: { value: 1.6 },
   uProjScale: { value: 1 },
   uShowVeg: { value: 1 },
-  uColorMode: { value: 0 }, // 0 = class/elevation, 1 = height above ground
+  uColorMode: { value: 0 }, // 0 = natural, 1 = height above ground, 2 = slope difficulty
   // Height map (filled in once it loads).
   uHeight: { value: null },
   uHeightOrigin: { value: new THREE.Vector2() },
@@ -65,7 +72,11 @@ const uniforms = {
   uRamp2: { value: new THREE.Color(0xa89f86) },
   uRamp3: { value: new THREE.Color(0xf2efe6) },
   uZRange: { value: 1 },
+  // Slope difficulty view: smoothed slope map + shared thresholds/colors.
+  uSlope: { value: null },
+  ...difficultyUniforms(),
 };
+bindDifficultyUniforms(uniforms);
 const material = new THREE.ShaderMaterial({
   uniforms,
   vertexShader: /* glsl */ `
@@ -82,6 +93,7 @@ const material = new THREE.ShaderMaterial({
     varying float vSize;
     ${terrainGLSL}
     ${trailGLSL}
+    ${difficultyGLSL}
 
     // Height above ground -> color: blue at ground level, green at shrub
     // height, yellow/red for tall trees.
@@ -97,12 +109,21 @@ const material = new THREE.ShaderMaterial({
       vec3 pos = position;
       vColor = color;
 
+      bool difficultyMode = uColorMode > 1.5;
       float ground = 0.0;
       float hag = 0.0;
+      vec3 rated = vec3(0.0);
       if (uHasHeight > 0.5) {
         ground = terrainHeight(pos.xy);
         hag = pos.z - ground;
-        if (uColorMode > 0.5) vColor = hagColor(hag);
+        if (difficultyMode) {
+          // Color by the slope of the ground under the point; trees a shade
+          // darker so canopy still reads as canopy.
+          rated = difficultyColor(slopeAt(pos.xy));
+          vColor = rated * (isGround ? 1.0 : 0.72);
+        } else if (uColorMode > 0.5) {
+          vColor = hagColor(hag);
+        }
       }
 
       // ---- Trail clearing ----
@@ -124,7 +145,10 @@ const material = new THREE.ShaderMaterial({
             cleared = strength * fall > 0.98;
           }
           float snow = strength * smoothstep(0.0, 1.0, t);
-          vColor = mix(vColor, uSnow, snow);
+          // Difficulty view: trails are a lightened version of the rating
+          // underneath (so you can see what a trail crosses), not snow.
+          vec3 trailColor = difficultyMode ? mix(rated, vec3(1.0), 0.38) : uSnow;
+          vColor = mix(vColor, trailColor, snow);
         }
       }
 
@@ -328,7 +352,9 @@ function updateCursor() {
   cursor.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
   cursor.visible = true;
 
-  const slope = terrain.slopeAt(hit.x, hit.y);
+  // Same smoothed slope and thresholds as the difficulty view, so the
+  // readout always matches the color under the cursor.
+  const slope = terrain.smoothSlopeAt(hit.x, hit.y);
   const rating = difficulty(slope);
   const elev = hit.z + sceneOffsetZ;
   cursorInfo =
@@ -463,6 +489,7 @@ async function load() {
     uniforms.uHeightOrigin.value.copy(t.origin);
     uniforms.uHeightRes.value = t.res;
     uniforms.uHasHeight.value = 1;
+    uniforms.uSlope.value = t.slopeTexture;
     ground = new GroundMesh(t, uniforms, { step: 2, sink: 0.5, colorGLSL: groundRampGLSL });
     scene.add(ground.mesh);
     occluderScene.add(ground.occluder);
@@ -668,7 +695,8 @@ help.innerHTML = `
     <tr><td>&minus; / =</td><td>Narrower / wider</td></tr>
     <tr><td>Delete &middot; Ctrl+Z &middot; Esc</td><td>Remove point &middot; undo &middot; cancel</td></tr>
     <tr><th colspan="2">View</th></tr>
-    <tr><td>V &middot; H &middot; E</td><td>Vegetation &middot; height above ground &middot; shading</td></tr>
+    <tr><td>V &middot; E</td><td>Vegetation &middot; shading</td></tr>
+    <tr><td>H &middot; D</td><td>Color by height above ground &middot; slope difficulty</td></tr>
     <tr><td>G &middot; M</td><td>Ghost hidden trails (and let them be picked) &middot; ground surface</td></tr>
     <tr><td>[ ]</td><td>Point size</td></tr>
     <tr><td>P</td><td>FPS counter</td></tr>
@@ -718,11 +746,6 @@ const view = {
     get: () => ground?.mesh.visible ?? true,
     set: (on) => { if (ground) ground.mesh.visible = on; },
   },
-  heightColors: {
-    label: 'Color by height above ground', shortcut: 'H',
-    get: () => uniforms.uColorMode.value > 0.5,
-    set: (on) => { uniforms.uColorMode.value = on ? 1 : 0; },
-  },
   shading: {
     label: 'Eye-Dome Lighting', shortcut: 'E',
     get: () => edlOn,
@@ -745,13 +768,36 @@ const view = {
 };
 const toggle = (opt) => opt.set(!opt.get());
 
+// "Color by" is one choice of three; the legend shows with the difficulty view.
+const COLOR = { natural: 0, height: 1, difficulty: 2 };
+const legend = new DifficultyLegend();
+const colorMode = () => uniforms.uColorMode.value;
+function setColorMode(mode) {
+  uniforms.uColorMode.value = mode;
+  legend.show(mode === COLOR.difficulty);
+}
+/** Keys H / D: switch to that mode, or back to natural if it's already on. */
+const toggleColorMode = (mode) => setColorMode(colorMode() === mode ? COLOR.natural : mode);
+const colorItem = (label, mode, shortcut) => ({
+  type: 'radio', label, shortcut,
+  get: () => colorMode() === mode,
+  set: () => setColorMode(mode),
+});
+
+// Edited thresholds: refresh the cursor readout and the selected trail's rating.
+onThresholdsChange(() => { pointerDirty = true; editor?.refresh(); });
+
 // ---------- Menu bar ----------
 const menuBar = new MenuBar();
 menuBar.addMenu('View', [
   { type: 'toggle', ...view.vegetation },
   { type: 'toggle', ...view.ground },
   { type: 'separator' },
-  { type: 'toggle', ...view.heightColors },
+  { type: 'header', label: 'Color by' },
+  colorItem('Natural', COLOR.natural),
+  colorItem('Height above ground', COLOR.height, 'H'),
+  colorItem('Slope difficulty', COLOR.difficulty, 'D'),
+  { type: 'separator' },
   { type: 'toggle', ...view.shading },
   {
     type: 'range', label: 'Point size', min: 0.6, max: 4, step: 0.1,
@@ -781,7 +827,8 @@ addEventListener('keydown', (e) => {
   switch (e.key) {
     case 'v': case 'V': toggle(view.vegetation); break;
     case 'm': case 'M': toggle(view.ground); break;
-    case 'h': case 'H': toggle(view.heightColors); break;
+    case 'h': case 'H': toggleColorMode(COLOR.height); break;
+    case 'd': case 'D': toggleColorMode(COLOR.difficulty); break;
     case 'e': case 'E': toggle(view.shading); break;
     case 'g': case 'G': toggle(view.ghost); break;
     case 'p': case 'P': toggle(view.fps); break;

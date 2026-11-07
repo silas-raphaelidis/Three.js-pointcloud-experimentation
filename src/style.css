@@ -108,3 +108,27 @@ canvas { display: block; }
 .menu-panel .value { color: #9aa3ad; font-variant-numeric: tabular-nums; }
 .menu-panel .row.range input { flex-basis: 100%; margin: 4px 0 0 20px; accent-color: #9fd3ff; }
 .menu-panel .sep { height: 1px; margin: 4px 6px; background: #2f3746; }
+.menu-panel .header { padding: 7px 8px 3px 28px; color: #9aa3ad; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+.menu-panel .row.radio .check { font-size: 9px; }
+
+#legend {
+  position: fixed; top: 46px; right: 12px; z-index: 5; width: 230px; padding: 10px 12px;
+  font: 13px/1.4 system-ui, sans-serif; color: #e6e9ee;
+  background: rgba(14, 17, 22, 0.85); border: 1px solid #262d39; border-radius: 8px;
+}
+#legend .title { margin-bottom: 8px; font-weight: 600; }
+#legend .row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+#legend .sw { width: 14px; height: 14px; border-radius: 3px; flex: none; }
+#legend .sw.dbl { box-shadow: inset 0 0 0 1px #5d6672; }
+#legend .name { flex: 1; }
+#legend .range { color: #9aa3ad; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#legend input {
+  width: 44px; margin: 0 2px; padding: 1px 4px; font: inherit; text-align: right; color: #e6e9ee;
+  background: #0e1116; border: 1px solid #2f3746; border-radius: 4px;
+}
+#legend .degrees { margin-top: 8px; color: #9aa3ad; font-size: 11px; }
+#legend .reset {
+  margin-top: 8px; padding: 3px 8px; font: 12px system-ui, sans-serif; color: #c9d0d8;
+  background: rgba(255, 255, 255, 0.06); border: 1px solid #2f3746; border-radius: 5px; cursor: pointer;
+}
+#legend .reset:hover { background: rgba(255, 255, 255, 0.12); }

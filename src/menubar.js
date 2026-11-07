@@ -3,6 +3,8 @@
  *
  * Menu items:
  *   { type: 'toggle', label, shortcut, get: () => bool, set: (bool) => void }
+ *   { type: 'radio',  label, shortcut, get: () => bool, set: () => void }   one of a group
+ *   { type: 'header', label }                                                 section title
  *   { type: 'range',  label, min, max, step, get: () => number, set: (n) => void, format?: (n) => string }
  *   { type: 'action', label, shortcut, action: () => void, enabled?: () => bool }
  *   { type: 'separator' }
@@ -100,6 +102,20 @@ export class MenuBar {
       return row;
     }
     const kbd = item.shortcut ? `<kbd>${item.shortcut}</kbd>` : '';
+
+    if (item.type === 'header') {
+      row.className = 'header';
+      row.textContent = item.label;
+      return row;
+    }
+
+    if (item.type === 'radio') {
+      const on = !!item.get();
+      row.className = `row radio${on ? ' on' : ''}`;
+      row.innerHTML = `<span class="check">${on ? '●' : ''}</span><span class="label">${item.label}</span>${kbd}`;
+      row.addEventListener('click', () => { item.set(); this.refresh(); });
+      return row;
+    }
 
     if (item.type === 'toggle') {
       const on = !!item.get();

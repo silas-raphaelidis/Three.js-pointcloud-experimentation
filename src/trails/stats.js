@@ -1,14 +1,14 @@
+import { rate } from '../difficulty.js';
+
 /**
  * Trail measurements from sampled geometry and the height map. Used for the
  * readout now, and later to score and label generated trails.
  */
 
-/** North American trail rating from a slope (rise/run). Rough guide. */
+/** Rating for a slope, using the shared (editable) thresholds. */
 export function difficulty(slope) {
-  if (slope < 0.25) return { name: 'green', color: '#3ec46d' };
-  if (slope < 0.4) return { name: 'blue', color: '#4c8dff' };
-  if (slope < 0.6) return { name: 'black', color: '#e6e9ee' };
-  return { name: 'double black', color: '#e6e9ee' };
+  const r = rate(slope);
+  return { name: r.name, color: r.text };
 }
 
 /**

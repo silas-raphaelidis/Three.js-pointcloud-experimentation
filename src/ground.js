@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { trailGLSL } from './trails/mask.js';
+import { difficultyGLSL } from './difficulty.js';
 
 /**
  * A solid ground surface built from the height map, drawn under the points.
@@ -47,12 +48,19 @@ export class GroundMesh {
           varying vec3 vWorld;
           ${colorGLSL}
           ${trailGLSL}
+          ${difficultyGLSL}
           void main() {
-            vec3 color = uColorMode > 0.5 ? vec3(0.15, 0.35, 0.9) : groundRamp(vWorld.z);
+            bool difficultyMode = uColorMode > 1.5;
+            vec3 rated = difficultyMode ? difficultyColor(slopeAt(vWorld.xy)) : vec3(0.0);
+            vec3 color = difficultyMode ? rated
+              : uColorMode > 0.5 ? vec3(0.15, 0.35, 0.9)
+              : groundRamp(vWorld.z);
             if (uHasTrail > 0.5) {
               vec2 trail = trailAt(vWorld.xy);
               float t = clamp((uTime - trail.y) / uFallDuration, 0.0, 1.0);
-              color = mix(color, uSnow, trail.x * smoothstep(0.0, 1.0, t));
+              // Same as the points: lightened rating in the difficulty view.
+              vec3 trailColor = difficultyMode ? mix(rated, vec3(1.0), 0.38) : uSnow;
+              color = mix(color, trailColor, trail.x * smoothstep(0.0, 1.0, t));
             }
             gl_FragColor = vec4(color, 1.0);
             #include <colorspace_fragment>
