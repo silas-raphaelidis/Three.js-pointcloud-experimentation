@@ -76,6 +76,11 @@ export class TrailNetwork extends EventTarget {
     this.#changed(this.trailsUsingNode(nodeId));
   }
 
+  rename(trailId, name) {
+    this.trails.get(trailId).name = name;
+    this.#changed([trailId]);
+  }
+
   setWidth(trailId, index, width) {
     this.trails.get(trailId).points[index].width = width;
     this.#changed([trailId]);

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { trailStats } from './stats.js';
+import { ContextMenu } from './menu.js';
 
 const PICK_PX = 11;         // screen radius for grabbing points and handles
 const CLICK_PX = 5;         // movement allowed before a press counts as a drag
@@ -23,6 +24,8 @@ const UNDO_LIMIT = 60;
  *   - / =                     narrower / wider (selected point, or new trails)
  *   Delete                    remove the selected point
  *   Ctrl+Z                    undo
+ *   right-click               options for a point / trail / spot (any mode)
+ *   Alt + drag                always orbits, even over trails (trackpads)
  */
 export class TrailEditor {
   constructor({ network, geometry, terrain, camera, dom, controls, view, onStatus }) {
@@ -37,6 +40,9 @@ export class TrailEditor {
     this.hover = null;
     this.cursorWorld = null;   // terrain point under the mouse
     this.history = [];
+    this.grabbed = false;      // we took this press away from OrbitControls
+    this.rightPress = null;    // pending right-click
+    this.menu = new ContextMenu();
 
     this.raycaster = new THREE.Raycaster();
     this.ndc = new THREE.Vector2();
@@ -267,16 +273,102 @@ export class TrailEditor {
     this.network.removeTrail(id);
   }
 
+  // ---------- Right-click menu ----------
+
+  /** Build the menu for whatever is under the cursor. Works in any mode;
+   *  trail actions switch edit mode on. */
+  #openMenu(x, y) {
+    const h = this.#pick(x, y);
+    const edit = (fn) => () => { if (!this.enabled) this.setEnabled(true); fn(); this.refresh(); };
+    // Width fields snapshot once per menu, so typing "45" is one undo step.
+    let snapped = false;
+    const snapOnce = () => { if (!snapped) { this.#snapshot(); snapped = true; } };
+    const items = [];
+
+    if (this.drawing) {
+      items.push(
+        { type: 'header', label: this.network.trail(this.drawing).name },
+        { label: 'Finish trail', action: edit(() => this.#finishDrawing()) },
+        { label: 'Cancel trail', danger: true, action: edit(() => this.#cancelDrawing()) },
+      );
+    } else if (h.type === 'node') {
+      const trailIds = this.network.trailsUsingNode(h.nodeId);
+      const junction = trailIds.length > 1;
+      items.push(
+        { type: 'header', label: junction ? `Junction · ${trailIds.length} trails` : 'Point' },
+        { label: 'Start branch from here', action: edit(() => this.#branchFromNode(h.nodeId)) },
+        { type: 'separator' },
+      );
+      for (const id of trailIds) {
+        const t = this.network.trail(id);
+        const index = t.points.findIndex((p) => p.node === h.nodeId);
+        items.push({
+          type: 'number',
+          label: junction ? `Width on ${t.name}` : 'Width',
+          value: Math.round(t.points[index].width),
+          min: MIN_WIDTH, max: MAX_WIDTH, suffix: 'm',
+          onChange: (w) => { snapOnce(); this.network.setWidth(id, index, w); this.refresh(); },
+        });
+      }
+      items.push({ type: 'separator' });
+      for (const id of trailIds) {
+        const t = this.network.trail(id);
+        const index = t.points.findIndex((p) => p.node === h.nodeId);
+        items.push({
+          label: junction ? `Remove from ${t.name}` : 'Delete point',
+          danger: true,
+          action: edit(() => { this.#snapshot(); this.network.removePoint(id, index); this.selection = null; }),
+        });
+      }
+    } else if (h.type === 'line') {
+      const t = this.network.trail(h.trailId);
+      items.push(
+        { type: 'header', label: t.name },
+        { label: 'Branch from here', action: edit(() => this.#branchFromLine(h)) },
+        {
+          label: 'Insert point here',
+          action: edit(() => {
+            this.#snapshot();
+            this.network.insertPoint(h.trailId, { x: h.x, y: h.y, width: h.w }, h.seg + 1);
+            this.selection = { trailId: h.trailId, index: h.seg + 1 };
+          }),
+        },
+        {
+          type: 'text', label: 'Name', value: t.name,
+          onSubmit: (name) => { if (name) { this.#snapshot(); this.network.rename(h.trailId, name); this.refresh(); } },
+        },
+        { type: 'separator' },
+        {
+          label: 'Delete trail', danger: true,
+          action: edit(() => { this.#snapshot(); this.network.removeTrail(h.trailId); this.selection = null; }),
+        },
+      );
+    } else if (h.world) {
+      items.push(
+        { label: 'Start new trail here', action: edit(() => this.#startTrail({ x: h.world.x, y: h.world.y, width: this.defaultWidth })) },
+      );
+    } else {
+      return;
+    }
+    this.menu.open(x, y, items);
+  }
+
   // ---------- Input ----------
 
   #onDown(e) {
-    if (!this.enabled || e.button !== 0) return;
+    if (e.button === 2) {
+      this.rightPress = { x: e.clientX, y: e.clientY };
+      return;
+    }
+    // Alt + drag always orbits/pans, even over trails (Blender's emulate-3-button).
+    if (!this.enabled || e.button !== 0 || e.altKey) return;
     const h = this.#pick(e.clientX, e.clientY);
     const grab = () => {
       e.stopImmediatePropagation(); // keep OrbitControls out of it
       e.preventDefault();
       try { this.dom.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
       this.controls.enabled = false;
+      this.grabbed = true;
     };
 
     if (this.drawing) {
@@ -344,12 +436,22 @@ export class TrailEditor {
   }
 
   #onUp(e) {
-    if (!this.enabled) return;
-    if (this.drag) {
-      this.drag = null;
+    if (e.button === 2) {
+      const rp = this.rightPress;
+      this.rightPress = null;
+      // A right-click (not a drag) opens the menu; right-drag does nothing.
+      if (rp && Math.hypot(e.clientX - rp.x, e.clientY - rp.y) <= CLICK_PX) this.#openMenu(e.clientX, e.clientY);
+      return;
+    }
+    // Always hand the camera back after any press we took over (selecting a
+    // trail by clicking used to leave orbiting switched off).
+    if (this.grabbed) {
+      this.grabbed = false;
       this.controls.enabled = true;
       try { this.dom.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
     }
+    if (!this.enabled) return;
+    this.drag = null;
 
     const press = this.press;
     this.press = null;
@@ -377,6 +479,8 @@ export class TrailEditor {
   }
 
   #onKey(e) {
+    // Don't treat typing in a menu field (width, rename) as shortcuts.
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     if (e.key === 't' || e.key === 'T') {
       this.setEnabled(!this.enabled);
       return;

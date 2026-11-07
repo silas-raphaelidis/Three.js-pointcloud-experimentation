@@ -12,3 +12,33 @@ canvas { display: block; }
   margin: 4px 0; padding: 6px 8px; border-left: 2px solid #9fd3ff;
   background: rgba(159, 211, 255, 0.08); max-width: 560px;
 }
+
+#help {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  padding: 16px 20px; max-height: 90vh; overflow: auto;
+  font: 13px/1.5 system-ui, sans-serif; color: #e6e9ee;
+  background: rgba(14, 17, 22, 0.94); border: 1px solid #2a3140; border-radius: 10px;
+}
+#help h3 { margin: 0 0 8px; font-size: 15px; }
+#help th { text-align: left; padding-top: 10px; color: #9fd3ff; font-weight: 600; }
+#help td { padding: 1px 16px 1px 0; vertical-align: top; }
+#help td:first-child { color: #9aa3ad; white-space: nowrap; }
+#help p { margin: 10px 0 0; color: #9aa3ad; font-size: 12px; }
+.context-menu {
+  position: fixed; z-index: 10; min-width: 200px; padding: 4px;
+  font: 13px/1.4 system-ui, sans-serif; color: #e6e9ee;
+  background: rgba(22, 26, 33, 0.97); border: 1px solid #2f3746; border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.context-menu .header { padding: 5px 10px 3px; color: #9aa3ad; font-size: 12px; }
+.context-menu .item { padding: 6px 10px; border-radius: 5px; cursor: pointer; }
+.context-menu .item:hover { background: rgba(159, 211, 255, 0.14); }
+.context-menu .item.danger { color: #ff8a80; }
+.context-menu .sep { height: 1px; margin: 4px 6px; background: #2f3746; }
+.context-menu .field { padding: 4px 10px; }
+.context-menu .field label { display: flex; align-items: center; gap: 8px; color: #c9d0d8; }
+.context-menu .field input {
+  flex: 1; min-width: 0; padding: 3px 6px; font: inherit; color: #e6e9ee;
+  background: #0e1116; border: 1px solid #2f3746; border-radius: 4px;
+}
+.context-menu .field input[type=number] { max-width: 64px; }

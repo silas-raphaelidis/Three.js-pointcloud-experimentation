@@ -11,6 +11,7 @@ import { TrailRasterizer } from './trails/rasterize.js';
 import { TrailView } from './trails/view.js';
 import { TrailEditor } from './trails/editor.js';
 import { difficulty } from './trails/stats.js';
+import { GroundMesh } from './ground.js';
 
 // Which file to load: ?file=ascutney-1.4m.copc.laz to compare thinning levels.
 const params = new URLSearchParams(location.search);
@@ -53,6 +54,12 @@ const uniforms = {
   uFallDuration: { value: 0.9 }, // seconds for a point to settle
   uFallStagger: { value: 0.6 },  // extra delay for the tallest trees
   uSnow: { value: new THREE.Color(0xf4f7fb) },
+  // Ground color ramp, shared by ground points (CPU) and the ground mesh (GPU).
+  uRamp0: { value: new THREE.Color(0x3b4a3f) },
+  uRamp1: { value: new THREE.Color(0x6b7a5a) },
+  uRamp2: { value: new THREE.Color(0xa89f86) },
+  uRamp3: { value: new THREE.Color(0xf2efe6) },
+  uZRange: { value: 1 },
 };
 const material = new THREE.ShaderMaterial({
   uniforms,
@@ -67,6 +74,7 @@ const material = new THREE.ShaderMaterial({
     uniform float uFallStagger;
     uniform vec3 uSnow;
     varying vec3 vColor;
+    varying float vSize;
     ${terrainGLSL}
     ${trailGLSL}
 
@@ -118,13 +126,20 @@ const material = new THREE.ShaderMaterial({
       vec4 mv = modelViewMatrix * vec4(pos, 1.0);
       gl_Position = projectionMatrix * mv;
       if (isVeg && !cleared && uShowVeg < 0.5) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); }
-      gl_PointSize = clamp(uSize * uProjScale / -mv.z, 1.0, 24.0);
+      // At least 2 px: smaller points flicker and leave holes at mid zoom.
+      gl_PointSize = clamp(uSize * uProjScale / -mv.z, 2.0, 24.0);
+      vSize = gl_PointSize;
     }`,
   fragmentShader: /* glsl */ `
     varying vec3 vColor;
+    varying float vSize;
     void main() {
-      vec2 c = gl_PointCoord * 2.0 - 1.0;
-      if (dot(c, c) > 1.0) discard;
+      // Round points only when big enough to look round; trimming the
+      // corners off a 2 px point just removes most of it.
+      if (vSize >= 3.0) {
+        vec2 c = gl_PointCoord * 2.0 - 1.0;
+        if (dot(c, c) > 1.0) discard;
+      }
       gl_FragColor = vec4(vColor, 1.0);
       #include <colorspace_fragment>
     }`,
@@ -153,6 +168,7 @@ const edlUniforms = {
   uFar: { value: camera.far },
   uStrength: { value: 1.0 },
   uRadius: { value: 1.4 },
+  uCap: { value: 0.03 }, // max darkening any one neighbour can contribute
 };
 const edlScene = new THREE.Scene();
 const edlCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -170,7 +186,7 @@ edlScene.add(
         uniform sampler2D tColor;
         uniform sampler2D tDepth;
         uniform vec2 uTexel;
-        uniform float uNear, uFar, uStrength, uRadius;
+        uniform float uNear, uFar, uStrength, uRadius, uCap;
         varying vec2 vUv;
         float logDepth(vec2 uv) {
           float d = texture2D(tDepth, uv).r;
@@ -187,7 +203,11 @@ edlScene.add(
           for (int i = 0; i < 8; i++) {
             float a = float(i) * 0.78539816;
             vec2 off = vec2(cos(a), sin(a)) * uRadius * uTexel;
-            sum += max(0.0, d - logDepth(vUv + off));
+            float n = logDepth(vUv + off);
+            // Background neighbours don't count (they used to turn every gap
+            // into a black-rimmed hole), and no single neighbour can darken a
+            // pixel by more than uCap.
+            if (n > 0.0) sum += min(uCap, max(0.0, d - n));
           }
           float shade = exp(-sum / 8.0 * 300.0 * uStrength);
           gl_FragColor = vec4(color.rgb * shade, 1.0);
@@ -204,12 +224,24 @@ function resizeTargets() {
 }
 
 // ---------- Colors ----------
+// One ramp for ground points (here, on the CPU) and the ground mesh (GLSL
+// below), both reading the same uniform colors so they always match.
 const ramp = [
-  [0.0, new THREE.Color(0x3b4a3f)],
-  [0.35, new THREE.Color(0x6b7a5a)],
-  [0.7, new THREE.Color(0xa89f86)],
-  [1.0, new THREE.Color(0xf2efe6)],
+  [0.0, uniforms.uRamp0.value],
+  [0.35, uniforms.uRamp1.value],
+  [0.7, uniforms.uRamp2.value],
+  [1.0, uniforms.uRamp3.value],
 ];
+const groundRampGLSL = /* glsl */ `
+  uniform vec3 uRamp0, uRamp1, uRamp2, uRamp3;
+  uniform float uZRange;
+  vec3 groundRamp(float z) {
+    float t = clamp(z / uZRange, 0.0, 1.0);
+    if (t <= 0.35) return mix(uRamp0, uRamp1, t / 0.35);
+    if (t <= 0.7) return mix(uRamp1, uRamp2, (t - 0.35) / 0.35);
+    return mix(uRamp2, uRamp3, (t - 0.7) / 0.3);
+  }
+`;
 function groundColor(t, out) {
   for (let i = 1; i < ramp.length; i++) {
     if (t <= ramp[i][0]) {
@@ -387,6 +419,7 @@ async function load() {
   // large for 32-bit floats on the GPU and would make points jitter.
   const center = new THREE.Vector3((min[0] + max[0]) / 2, (min[1] + max[1]) / 2, min[2]);
   const zRange = max[2] - min[2];
+  uniforms.uZRange.value = zRange;
 
   sceneOffsetZ = center.z;
 
@@ -398,6 +431,9 @@ async function load() {
       uniforms.uHeightOrigin.value.copy(t.origin);
       uniforms.uHeightRes.value = t.res;
       uniforms.uHasHeight.value = 1;
+      ground = new GroundMesh(t, uniforms, { step: 2, sink: 0.5, colorGLSL: groundRampGLSL });
+      scene.add(ground.mesh);
+      occluderScene.add(ground.occluder);
       setupTrails(t);
     })
     .catch((err) => console.error('height map failed to load', err));
@@ -408,6 +444,7 @@ async function load() {
   camera.far = size * 6;
   camera.updateProjectionMatrix();
   edlUniforms.uFar.value = camera.far;
+  homeView = { position: camera.position.clone(), target: controls.target.clone() };
 
   // Walk every hierarchy page to collect all nodes.
   const nodes = {};
@@ -474,12 +511,126 @@ load().catch((err) => {
   updateHud(`· <span style="color:#f77">failed: ${err.message}</span>`);
 });
 
-// ---------- Input ----------
+// ---------- Camera controls (Blender-style) ----------
+//   left-drag / middle-drag  orbit        Alt+left-drag      orbit (trackpads)
+//   Shift + either           pan          Shift+Alt+left     pan
+//   Ctrl+middle-drag         zoom         wheel              zoom toward cursor
+//   right-click              context menu (right-drag does nothing)
+// OrbitControls already turns an orbit drag into a pan when Shift is held.
+controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.ROTATE, RIGHT: null };
+controls.zoomToCursor = true;
+renderer.domElement.addEventListener(
+  'pointerdown',
+  (e) => {
+    if (e.button === 1) {
+      controls.mouseButtons.MIDDLE = e.ctrlKey ? THREE.MOUSE.DOLLY : THREE.MOUSE.ROTATE;
+    }
+  },
+  { capture: true }
+);
+// No browser menu or middle-click autoscroll on the 3D view.
+renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+renderer.domElement.addEventListener('mousedown', (e) => { if (e.button === 1) e.preventDefault(); });
+
+// Smooth camera moves for F / Home.
+let homeView = null;
+let flight = null; // { from: {position, target}, to: {position, target}, t0 }
+const FLIGHT_S = 0.45;
+
+function flyTo(position, target) {
+  flight = {
+    from: { position: camera.position.clone(), target: controls.target.clone() },
+    to: { position: position.clone(), target: target.clone() },
+    t0: clock.getElapsedTime(),
+  };
+}
+
+function updateFlight() {
+  if (!flight) return;
+  const u = Math.min(1, (clock.getElapsedTime() - flight.t0) / FLIGHT_S);
+  const e = u * u * (3 - 2 * u);
+  camera.position.lerpVectors(flight.from.position, flight.to.position, e);
+  controls.target.lerpVectors(flight.from.target, flight.to.target, e);
+  if (u >= 1) flight = null;
+}
+
+/** Frame a world-space box, keeping the current viewing direction. */
+function frameBox(box) {
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  const radius = Math.max(sphere.radius, 40);
+  const dist = (radius / Math.sin(THREE.MathUtils.degToRad(camera.fov) / 2)) * 1.1;
+  const dir = camera.position.clone().sub(controls.target).normalize();
+  flyTo(sphere.center.clone().addScaledVector(dir, dist), sphere.center);
+}
+
+/** F: frame the selected point or trail (Blender's "View Selected"). */
+function frameSelected() {
+  const sel = editor?.selection;
+  if (!sel || !terrain) return;
+  const box = new THREE.Box3();
+  if (sel.index !== null) {
+    const n = network.node(network.trail(sel.trailId).points[sel.index].node);
+    const z = terrain.heightAt(n.x, n.y);
+    box.setFromCenterAndSize(new THREE.Vector3(n.x, n.y, z), new THREE.Vector3(120, 120, 40));
+  } else {
+    for (const p of geometry.get(sel.trailId)?.samples ?? []) {
+      box.expandByPoint(new THREE.Vector3(p.x, p.y, terrain.heightAt(p.x, p.y)));
+    }
+  }
+  if (!box.isEmpty()) frameBox(box);
+}
+
+// ---------- Help panel ----------
+const help = document.createElement('div');
+help.id = 'help';
+help.hidden = true;
+help.innerHTML = `
+  <h3>Controls</h3>
+  <table>
+    <tr><th colspan="2">Camera</th></tr>
+    <tr><td>Left- or middle-drag</td><td>Orbit</td></tr>
+    <tr><td>Shift + drag</td><td>Pan</td></tr>
+    <tr><td>Ctrl + middle-drag</td><td>Zoom</td></tr>
+    <tr><td>Wheel</td><td>Zoom toward cursor</td></tr>
+    <tr><td>Alt + left-drag / Shift + Alt</td><td>Orbit / pan (trackpads)</td></tr>
+    <tr><td>F</td><td>Frame selected trail or point</td></tr>
+    <tr><td>Home</td><td>Frame the whole mountain</td></tr>
+    <tr><th colspan="2">Trails</th></tr>
+    <tr><td>T</td><td>Edit trails on/off</td></tr>
+    <tr><td>Click terrain</td><td>Start a trail / add a point</td></tr>
+    <tr><td>Double-click / Enter</td><td>Finish the trail</td></tr>
+    <tr><td>Right-click</td><td>Options for a point, trail or spot</td></tr>
+    <tr><td>Drag a point / handle</td><td>Move it / change width</td></tr>
+    <tr><td>Shift-click a trail or point</td><td>Branch from there</td></tr>
+    <tr><td>&minus; / =</td><td>Narrower / wider</td></tr>
+    <tr><td>Delete &middot; Ctrl+Z &middot; Esc</td><td>Remove point &middot; undo &middot; cancel</td></tr>
+    <tr><th colspan="2">View</th></tr>
+    <tr><td>V &middot; H &middot; E</td><td>Vegetation &middot; height above ground &middot; shading</td></tr>
+    <tr><td>G &middot; M</td><td>Ghost hidden trails &middot; ground surface</td></tr>
+    <tr><td>[ ]</td><td>Point size</td></tr>
+  </table>
+  <p>Press ? to close</p>`;
+document.body.appendChild(help);
+
+// ---------- Keys ----------
+let edlOn = true;
+let ghostTrails = false;
+const typing = (e) => e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
+
 addEventListener('keydown', (e) => {
-  if (e.key === 'v' || e.key === 'V') uniforms.uShowVeg.value = 1 - uniforms.uShowVeg.value;
-  if (e.key === 'h' || e.key === 'H') uniforms.uColorMode.value = 1 - uniforms.uColorMode.value;
-  if (e.key === ']') uniforms.uSize.value *= 1.2;
-  if (e.key === '[') uniforms.uSize.value /= 1.2;
+  if (typing(e) || e.ctrlKey || e.metaKey || e.altKey) return;
+  switch (e.key) {
+    case 'v': case 'V': uniforms.uShowVeg.value = 1 - uniforms.uShowVeg.value; break;
+    case 'h': case 'H': uniforms.uColorMode.value = 1 - uniforms.uColorMode.value; break;
+    case 'e': case 'E': edlOn = !edlOn; break;
+    case 'g': case 'G': ghostTrails = !ghostTrails; break;
+    case 'm': case 'M': if (ground) ground.mesh.visible = !ground.mesh.visible; break;
+    case ']': uniforms.uSize.value *= 1.2; break;
+    case '[': uniforms.uSize.value /= 1.2; break;
+    case 'f': case 'F': frameSelected(); break;
+    case 'Home': if (homeView) flyTo(homeView.position, homeView.target); break;
+    case '?': help.hidden = !help.hidden; break;
+  }
 });
 
 addEventListener('resize', () => {
@@ -493,14 +644,45 @@ addEventListener('resize', () => {
 updateProjScale();
 updateHud();
 
-let edlOn = true;
-addEventListener('keydown', (e) => {
-  if (e.key === 'e' || e.key === 'E') edlOn = !edlOn;
-});
 renderer.domElement.tabIndex = 0; // let the canvas take keyboard focus
 renderer.domElement.addEventListener('pointerdown', () => renderer.domElement.focus());
 
+// ---------- Overlay passes ----------
+// The overlay is drawn after shading, tested against the ground mesh's depth
+// (not the points', so trees don't chop lines up). With ghosting on, hidden
+// parts are first drawn faintly with depth testing off.
+const occluderScene = new THREE.Scene();
+let ground = null;
+
+function setOverlayGhost(ghost) {
+  overlay.traverse((o) => {
+    const m = o.material;
+    if (!m) return;
+    if (m.userData.baseOpacity === undefined) {
+      m.userData.baseOpacity = m.opacity;
+      m.userData.baseTransparent = m.transparent;
+    }
+    m.depthTest = !ghost;
+    m.transparent = ghost || m.userData.baseTransparent;
+    m.opacity = ghost ? m.userData.baseOpacity * 0.28 : m.userData.baseOpacity;
+  });
+}
+
+function renderOverlay() {
+  renderer.autoClear = false;
+  renderer.clearDepth();
+  if (ghostTrails) {
+    setOverlayGhost(true);
+    renderer.render(overlay, camera);
+  }
+  renderer.render(occluderScene, camera); // depth only
+  setOverlayGhost(false);
+  renderer.render(overlay, camera);
+  renderer.autoClear = true;
+}
+
 renderer.setAnimationLoop(() => {
+  updateFlight();
   controls.update();
   uniforms.uTime.value = clock.getElapsedTime();
   updateCursor();
@@ -515,10 +697,7 @@ renderer.setAnimationLoop(() => {
   } else {
     renderer.render(scene, camera);
   }
-  // Overlay on top, without clearing what's already drawn.
-  renderer.autoClear = false;
-  renderer.render(overlay, camera);
-  renderer.autoClear = true;
+  renderOverlay();
 });
 
 // Re-pick when the camera moves under a still mouse.
