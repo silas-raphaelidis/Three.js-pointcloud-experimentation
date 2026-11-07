@@ -1,3 +1,6 @@
 node_modules
 dist
 .DS_Store
+
+# Large LiDAR working files (regenerate with data-prep pipelines)
+data-prep/raw/

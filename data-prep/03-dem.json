@@ -1,0 +1,10 @@
+[
+  { "type": "readers.las", "filename": "data-prep/raw/ascutney-full.laz" },
+  { "type": "filters.range", "limits": "Classification[2:2]" },
+  {
+    "type": "writers.gdal", "filename": "data-prep/raw/ascutney-dem-1m.tif",
+    "resolution": 1.0, "output_type": "idw", "window_size": 6,
+    "data_type": "float32", "nodata": -9999, "gdaldriver": "GTiff",
+    "bounds": "([704654,707748],[4811490,4814574])"
+  }
+]

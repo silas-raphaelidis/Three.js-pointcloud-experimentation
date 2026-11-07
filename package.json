@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "copc": "^0.0.9",
     "three": "^0.187.0"
   },
   "devDependencies": {
