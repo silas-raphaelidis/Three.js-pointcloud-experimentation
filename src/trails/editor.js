@@ -10,34 +10,36 @@ const MAX_WIDTH = 120;
 const UNDO_LIMIT = 60;
 
 /**
- * Mouse/keyboard editing of the trail network. The only part of the app
- * that changes the network in response to input; the view just draws.
+ * Mouse/keyboard editing of the trail network. Always on (there is no
+ * separate view mode); editing only happens through deliberate actions, so
+ * casual clicking and dragging just looks around.
  *
- * Edit mode (T):
- *   right-click terrain       "Start new trail here", then click to add points;
- *                             double-click or Enter to finish, Esc to cancel
- *                             (a plain click on terrain only deselects)
+ *   drag anywhere             orbit (also when starting on a trail line)
  *   click a trail             select it
- *   click a selected trail    insert a point there (and drag it)
+ *   double-click a trail      insert a point there
  *   drag a point              move it (junctions move every trail through them)
  *   drag a side handle        change the selected point's width
  *   Shift-click a trail/point branch a new trail from there (or select a point + B)
+ *   right-click               options for a point / trail / spot
+ *                             ("Start new trail here" on open terrain)
+ *   while drawing: click adds a point, double-click / Enter finishes, Esc cancels
  *   - / =                     narrower / wider (selected point, or new trails)
- *   Delete                    remove the selected point
- *   Ctrl+Z                    undo
- *   right-click               options for a point / trail / spot (any mode)
- *   Alt + drag                always orbits, even over trails (trackpads)
+ *   Delete · Ctrl+Z · Esc     remove point · undo · deselect
+ *   Alt + drag                always orbits/pans, even over points (trackpads)
+ *
+ * When locked, trails can't be hovered, selected or edited; any attempt
+ * calls onLocked() so the app can say so.
  */
 export class TrailEditor {
-  constructor({ network, geometry, terrain, camera, dom, controls, view, onStatus }) {
-    Object.assign(this, { network, geometry, terrain, camera, dom, controls, view, onStatus });
-    this.enabled = false;
+  constructor({ network, geometry, terrain, camera, dom, controls, view, onStatus, onLocked }) {
+    Object.assign(this, { network, geometry, terrain, camera, dom, controls, view, onStatus, onLocked });
+    this.locked = false;
     this.defaultWidth = 36;
     this.pickHidden = false;   // true while hidden trails are ghosted (G)
     this.drawing = null;       // trail id being created
     this.selection = null;     // { trailId, index|null }
     this.drag = null;          // { type: 'node'|'width', ... }
-    this.press = null;         // pending click on open terrain
+    this.press = null;         // left press waiting to become a click or a drag
     this.lastClick = null;
     this.hover = null;
     this.cursorWorld = null;   // terrain point under the mouse
@@ -58,14 +60,22 @@ export class TrailEditor {
 
   // ---------- Public ----------
 
-  setEnabled(on) {
-    this.enabled = on;
-    if (!on) {
+  /** Lock or unlock trail selection. Locking finishes any drawing and deselects. */
+  setLocked(on) {
+    this.locked = on;
+    if (on) {
       this.#finishDrawing();
       this.selection = null;
       this.hover = null;
+      this.drag = null;
+      this.dom.style.cursor = '';
     }
     this.refresh();
+  }
+
+  /** Is something selectable under the mouse right now? (cursor highlight) */
+  get hoveringSelectable() {
+    return !this.locked && ['node', 'handle', 'line'].includes(this.hover?.type);
   }
 
   /** Re-draw editor state (call after the network changes). */
@@ -81,10 +91,9 @@ export class TrailEditor {
     let highlightNode = null;
     let handles = null;
     if (sel && sel.index !== null) {
-      const node = this.#stopNode(sel.trailId, sel.index);
-      highlightNode = node;
+      highlightNode = this.#stopNode(sel.trailId, sel.index);
       handles = this.#handlePositions(sel.trailId, sel.index);
-    } else if (this.hover?.type === 'node') {
+    } else if (this.hover?.type === 'node' && !this.locked) {
       highlightNode = this.network.node(this.hover.nodeId);
     }
 
@@ -96,42 +105,39 @@ export class TrailEditor {
     }
 
     this.view.setState({
-      selectedTrail: this.enabled ? (this.drawing ?? sel?.trailId ?? null) : null,
-      highlightNode: this.enabled ? highlightNode : null,
-      handles: this.enabled ? handles : null,
-      preview: this.enabled ? preview : null,
+      selectedTrail: this.drawing ?? sel?.trailId ?? null,
+      highlightNode,
+      handles,
+      preview,
     });
     this.onStatus?.(this.status());
   }
 
-  /** One-line description for the HUD. */
+  /** Editing panel text, or '' when nothing is selected or being drawn. */
   status() {
-    if (!this.enabled) return '';
     if (this.drawing) {
       const n = this.network.trail(this.drawing)?.points.length ?? 0;
-      return `Drawing · ${n} point${n === 1 ? '' : 's'} · click to add · double-click/Enter to finish · Esc to cancel`;
+      return `<b>Drawing</b> · ${n} point${n === 1 ? '' : 's'} · click to add · double-click or Enter to finish · Esc to cancel`;
     }
     const sel = this.selection;
-    if (sel) {
-      const t = this.network.trail(sel.trailId);
-      const geo = this.geometry.get(sel.trailId);
-      const st = geo && trailStats(geo.samples, this.terrain);
-      let line = `<b>${t.name}</b>`;
-      if (st) {
-        line +=
-          ` · ${st.length.toFixed(0)} m long · ${st.vertical.toFixed(0)} m vertical` +
-          ` · steepest ${(st.maxSustained * 100).toFixed(0)}% · <span style="color:${st.rating.color}">${st.rating.name}</span>`;
-      }
-      if (sel.index !== null) {
-        const p = t.points[sel.index];
-        const shared = this.network.isJunction(p.node) ? ' (junction)' : '';
-        line += `<br>Point ${sel.index + 1}/${t.points.length}${shared} · width ${p.width.toFixed(0)} m · drag handles or − = · Del removes · B branches`;
-      } else {
-        line += '<br>Click the trail to add a point · drag points to reshape';
-      }
-      return line;
+    if (!sel) return '';
+    const t = this.network.trail(sel.trailId);
+    const geo = this.geometry.get(sel.trailId);
+    const st = geo && trailStats(geo.samples, this.terrain);
+    let line = `<b>${t.name}</b>`;
+    if (st) {
+      line +=
+        ` · ${st.length.toFixed(0)} m long · ${st.vertical.toFixed(0)} m vertical` +
+        ` · steepest ${(st.maxSustained * 100).toFixed(0)}% · <span style="color:${st.rating.color}">${st.rating.name}</span>`;
     }
-    return `Right-click terrain to start a trail (${this.defaultWidth} m) · Shift-click or right-click a trail to branch`;
+    if (sel.index !== null) {
+      const p = t.points[sel.index];
+      const shared = this.network.isJunction(p.node) ? ' (junction)' : '';
+      line += `<br>Point ${sel.index + 1}/${t.points.length}${shared} · width ${p.width.toFixed(0)} m · drag handles or − = · Del removes · B branches`;
+    } else {
+      line += '<br>Double-click the trail to add a point · drag points to reshape · F to frame';
+    }
+    return line;
   }
 
   // ---------- Geometry helpers ----------
@@ -261,6 +267,12 @@ export class TrailEditor {
     this.selection = null;
   }
 
+  #insertPoint(h) {
+    this.#snapshot();
+    this.network.insertPoint(h.trailId, { x: h.x, y: h.y, width: h.w }, h.seg + 1);
+    this.selection = { trailId: h.trailId, index: h.seg + 1 };
+  }
+
   #addDrawingPoint(target) {
     const t = this.network.trail(this.drawing);
     const width = t.points[t.points.length - 1].width;
@@ -291,13 +303,28 @@ export class TrailEditor {
     this.network.removeTrail(id);
   }
 
+  #selectNode(nodeId) {
+    const sel = this.selection;
+    const selTrail = sel && this.network.trail(sel.trailId);
+    let index = selTrail ? selTrail.points.findIndex((p) => p.node === nodeId) : -1;
+    let trailId = sel?.trailId;
+    if (index < 0) {
+      trailId = this.network.trailsUsingNode(nodeId)[0];
+      index = this.network.trail(trailId).points.findIndex((p) => p.node === nodeId);
+    }
+    this.selection = { trailId, index };
+  }
+
   // ---------- Right-click menu ----------
 
-  /** Build the menu for whatever is under the cursor. Works in any mode;
-   *  trail actions switch edit mode on. */
+  /** Build the menu for whatever is under the cursor. */
   #openMenu(x, y) {
+    if (this.locked) {
+      this.onLocked?.();
+      return;
+    }
     const h = this.#pick(x, y);
-    const edit = (fn) => () => { if (!this.enabled) this.setEnabled(true); fn(); this.refresh(); };
+    const edit = (fn) => () => { fn(); this.refresh(); };
     // Width fields snapshot once per menu, so typing "45" is one undo step.
     let snapped = false;
     const snapOnce = () => { if (!snapped) { this.#snapshot(); snapped = true; } };
@@ -343,14 +370,7 @@ export class TrailEditor {
       items.push(
         { type: 'header', label: t.name },
         { label: 'Branch from here', action: edit(() => this.#branchFromLine(h)) },
-        {
-          label: 'Insert point here',
-          action: edit(() => {
-            this.#snapshot();
-            this.network.insertPoint(h.trailId, { x: h.x, y: h.y, width: h.w }, h.seg + 1);
-            this.selection = { trailId: h.trailId, index: h.seg + 1 };
-          }),
-        },
+        { label: 'Insert point here', action: edit(() => this.#insertPoint(h)) },
         {
           type: 'text', label: 'Name', value: t.name,
           onSubmit: (name) => { if (name) { this.#snapshot(); this.network.rename(h.trailId, name); this.refresh(); } },
@@ -378,66 +398,40 @@ export class TrailEditor {
       this.rightPress = { x: e.clientX, y: e.clientY };
       return;
     }
-    // Alt + drag always orbits/pans, even over trails (Blender's emulate-3-button).
-    if (!this.enabled || e.button !== 0 || e.altKey) return;
+    // Alt + drag always orbits/pans, even over points (Blender's emulate-3-button).
+    if (e.button !== 0 || e.altKey) return;
     const h = this.#pick(e.clientX, e.clientY);
-    const grab = () => {
-      e.stopImmediatePropagation(); // keep OrbitControls out of it
-      e.preventDefault();
-      try { this.dom.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
-      this.controls.enabled = false;
-      this.grabbed = true;
-    };
 
-    if (this.drawing) {
-      // Clicks while drawing are resolved on release, so dragging still orbits.
-      this.press = { x: e.clientX, y: e.clientY, target: h };
+    // Locked, drawing, trail lines and open terrain are all decided on
+    // release: a click acts, a drag orbits (or pans with Shift).
+    if (this.locked || this.drawing || h.type === 'line' || h.type === 'terrain' || h.type === 'none') {
+      this.press = { x: e.clientX, y: e.clientY, target: h, shift: e.shiftKey };
       return;
     }
 
+    // Points and width handles are small, deliberate targets: grab them now.
+    e.stopImmediatePropagation(); // keep OrbitControls out of it
+    e.preventDefault();
+    try { this.dom.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
+    this.controls.enabled = false;
+    this.grabbed = true;
+
     if (h.type === 'handle') {
-      grab();
       this.#snapshot();
       this.drag = { type: 'width', ...this.selection };
-    } else if (h.type === 'node') {
-      grab();
-      if (e.shiftKey) {
-        this.#branchFromNode(h.nodeId);
-      } else {
-        const sel = this.selection;
-        const selTrail = sel && this.network.trail(sel.trailId);
-        let idx = selTrail ? selTrail.points.findIndex((p) => p.node === h.nodeId) : -1;
-        let trailId = sel?.trailId;
-        if (idx < 0) {
-          trailId = this.network.trailsUsingNode(h.nodeId)[0];
-          idx = this.network.trail(trailId).points.findIndex((p) => p.node === h.nodeId);
-        }
-        this.selection = { trailId, index: idx };
-        this.drag = { type: 'node', nodeId: h.nodeId, moved: false };
-      }
-    } else if (h.type === 'line') {
-      grab();
-      if (e.shiftKey) {
-        this.#branchFromLine(h);
-      } else if (this.selection?.trailId === h.trailId) {
-        this.#snapshot();
-        const nodeId = this.network.insertPoint(h.trailId, { x: h.x, y: h.y, width: h.w }, h.seg + 1);
-        this.selection = { trailId: h.trailId, index: h.seg + 1 };
-        this.drag = { type: 'node', nodeId, moved: true };
-      } else {
-        this.selection = { trailId: h.trailId, index: null };
-      }
+    } else if (e.shiftKey) {
+      this.#branchFromNode(h.nodeId);
     } else {
-      // Open terrain: wait for release to tell a click from an orbit drag.
-      this.press = { x: e.clientX, y: e.clientY, target: h };
+      this.#selectNode(h.nodeId);
+      this.drag = { type: 'node', nodeId: h.nodeId, moved: false };
     }
     this.refresh();
   }
 
   #onMove(e) {
-    if (!this.enabled) return;
     const world = this.#terrainAt(e.clientX, e.clientY);
     this.cursorWorld = world;
+    if (this.locked) return;
 
     if (this.drag?.type === 'node' && world) {
       if (!this.drag.moved) { this.#snapshot(); this.drag.moved = true; }
@@ -446,9 +440,9 @@ export class TrailEditor {
       const n = this.#stopNode(this.drag.trailId, this.drag.index);
       const w = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, 2 * Math.hypot(world.x - n.x, world.y - n.y)));
       this.network.setWidth(this.drag.trailId, this.drag.index, w);
-    } else if (!this.drag) {
+    } else if (!this.drag && !this.press) {
       this.hover = this.#pick(e.clientX, e.clientY);
-      this.dom.style.cursor = ['handle', 'node', 'line'].includes(this.hover.type) ? 'pointer' : '';
+      this.dom.style.cursor = this.hoveringSelectable ? 'pointer' : '';
     }
     this.refresh();
   }
@@ -461,37 +455,40 @@ export class TrailEditor {
       if (rp && Math.hypot(e.clientX - rp.x, e.clientY - rp.y) <= CLICK_PX) this.#openMenu(e.clientX, e.clientY);
       return;
     }
-    // Always hand the camera back after any press we took over (selecting a
-    // trail by clicking used to leave orbiting switched off).
+    // Always hand the camera back after any press we took over.
     if (this.grabbed) {
       this.grabbed = false;
       this.controls.enabled = true;
       try { this.dom.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
     }
-    if (!this.enabled) return;
     this.drag = null;
 
     const press = this.press;
     this.press = null;
     if (!press || Math.hypot(e.clientX - press.x, e.clientY - press.y) > CLICK_PX) {
       this.refresh();
-      return; // it was an orbit drag
+      return; // it was an orbit / pan drag
     }
 
     const now = performance.now();
     const isDouble =
       this.lastClick && now - this.lastClick.time < DOUBLE_CLICK_MS &&
       Math.hypot(e.clientX - this.lastClick.x, e.clientY - this.lastClick.y) < CLICK_PX * 2;
-    this.lastClick = { time: now, x: e.clientX, y: e.clientY };
+    this.lastClick = isDouble ? null : { time: now, x: e.clientX, y: e.clientY };
 
     const target = press.target;
-    if (this.drawing) {
+    if (this.locked) {
+      // Clicking a trail while locked: say so (a drag just orbits).
+      if (['node', 'handle', 'line'].includes(target.type)) this.onLocked?.();
+    } else if (this.drawing) {
       if (isDouble) this.#finishDrawing();
       else this.#addDrawingPoint(target);
+    } else if (target.type === 'line') {
+      if (press.shift) this.#branchFromLine(target);
+      else if (isDouble) this.#insertPoint(target);
+      else this.selection = { trailId: target.trailId, index: null };
     } else {
-      // Click on open terrain just deselects. New trails start from the
-      // right-click menu or by branching, never by accident.
-      this.selection = null;
+      this.selection = null; // click on open terrain deselects
     }
     this.refresh();
   }
@@ -499,16 +496,14 @@ export class TrailEditor {
   #onKey(e) {
     // Don't treat typing in a menu field (width, rename) as shortcuts.
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-    if (e.key === 't' || e.key === 'T') {
-      this.setEnabled(!this.enabled);
-      return;
-    }
-    if (!this.enabled) return;
     const sel = this.selection;
 
     if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
       e.preventDefault();
-      this.#undo();
+      if (this.locked) this.onLocked?.();
+      else this.#undo();
+    } else if (this.locked) {
+      return; // nothing is selected while locked; other keys do nothing
     } else if (e.key === 'Enter') {
       this.#finishDrawing();
     } else if (e.key === 'Escape') {

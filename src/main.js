@@ -15,6 +15,7 @@ import { GroundMesh } from './ground.js';
 import { withRetry } from './retry.js';
 import { LoadingScreen } from './loading.js';
 import { MenuBar } from './menubar.js';
+import { TrailLock } from './traillock.js';
 import {
   difficultyGLSL,
   difficultyUniforms,
@@ -298,13 +299,12 @@ let cursorInfo = '';
 let editorStatus = '';
 function updateHud(extra) {
   if (extra !== undefined) loadStatus = extra;
-  const editing = editor?.enabled;
   hud.innerHTML = `
     <strong>${decodeURIComponent(FILE.split('/').pop())}</strong><br>
     ${(loadedPoints / 1e6).toFixed(1)}M / ${(totalPoints / 1e6).toFixed(1)}M points ${loadStatus}<br>
     ${cursorInfo ? `<span class="cursor">${cursorInfo}</span><br>` : ''}
-    ${editing ? `<div class="editor"><b style="color:#9fd3ff">Editing trails</b> · T to stop · Ctrl+Z undo<br>${editorStatus}</div>` : ''}
-    <span class="keys">Drag to orbit · Shift-drag to pan · wheel to zoom · display options in View</span>`;
+    ${editorStatus ? `<div class="editor">${editorStatus}</div>` : ''}
+    <span class="keys">Drag to orbit · Shift-drag to pan · wheel to zoom · right-click for trail options</span>`;
 }
 
 // ---------- Terrain + cursor ----------
@@ -370,7 +370,10 @@ function updateCursor() {
 function scaleCursor() {
   if (!cursor.visible) return;
   const dist = camera.position.distanceTo(cursor.position);
-  cursor.scale.setScalar(dist * 0.012);
+  // Yellow and a touch larger over anything you can select or drag.
+  const selectable = !!editor?.hoveringSelectable;
+  cursor.material.color.set(selectable ? 0xffd34d : 0xffffff);
+  cursor.scale.setScalar(dist * (selectable ? 0.015 : 0.012));
 }
 
 // ---------- Trails ----------
@@ -401,6 +404,7 @@ function setupTrails(t) {
     network, geometry, terrain: t, camera, dom: renderer.domElement, controls, view: trailView,
     // Also keeps the menu bar's "Edit trails" button in sync with the T key.
     onStatus: (s) => { editorStatus = s; updateHud(); menuBar.refresh(); },
+    onLocked: () => trailLock.nudge(),
   });
   uniforms.uTrail.value = trailMask.texture;
   uniforms.uHasTrail.value = 1;
@@ -689,15 +693,16 @@ help.innerHTML = `
     <tr><td>F</td><td>Frame selected trail or point</td></tr>
     <tr><td>Home</td><td>Frame the whole mountain</td></tr>
     <tr><th colspan="2">Trails</th></tr>
-    <tr><td>T</td><td>Edit trails on/off</td></tr>
     <tr><td>Right-click terrain</td><td>Start a new trail</td></tr>
     <tr><td>Click terrain (drawing)</td><td>Add a point</td></tr>
     <tr><td>Double-click / Enter</td><td>Finish the trail</td></tr>
     <tr><td>Right-click</td><td>Options for a point, trail or spot</td></tr>
+    <tr><td>Click / double-click a trail</td><td>Select it / add a point</td></tr>
     <tr><td>Drag a point / handle</td><td>Move it / change width</td></tr>
     <tr><td>Shift-click a trail or point</td><td>Branch from there</td></tr>
     <tr><td>&minus; / =</td><td>Narrower / wider</td></tr>
     <tr><td>Delete &middot; Ctrl+Z &middot; Esc</td><td>Remove point &middot; undo &middot; cancel</td></tr>
+    <tr><td>L</td><td>Lock / unlock trail selection</td></tr>
     <tr><th colspan="2">View</th></tr>
     <tr><td>V &middot; E</td><td>Vegetation &middot; shading</td></tr>
     <tr><td>H &middot; D</td><td>Color by height above ground &middot; slope difficulty</td></tr>
@@ -823,12 +828,10 @@ menuBar.addMenu('View', [
   { type: 'action', label: 'Frame selected', shortcut: 'F', action: () => frameSelected(), enabled: () => !!editor?.selection },
   { type: 'action', label: 'Frame whole mountain', shortcut: 'Home', action: () => homeView && flyTo(homeView.position, homeView.target) },
 ]);
-menuBar.addToggleButton({
-  label: 'Edit trails', shortcut: 'T',
-  get: () => !!editor?.enabled,
-  set: (on) => editor?.setEnabled(on),
-});
 menuBar.addButton({ label: 'Controls', shortcut: '?', action: () => { help.hidden = !help.hidden; } });
+
+// Lock button on the left edge: blocks trail selection and editing.
+const trailLock = new TrailLock({ onChange: (locked) => editor?.setLocked(locked) });
 
 // ---------- Keys ----------
 const typing = (e) => e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
@@ -846,6 +849,7 @@ addEventListener('keydown', (e) => {
     case ']': uniforms.uSize.value = Math.min(4, uniforms.uSize.value * 1.2); break;
     case '[': uniforms.uSize.value = Math.max(0.6, uniforms.uSize.value / 1.2); break;
     case 'f': case 'F': frameSelected(); break;
+    case 'l': case 'L': trailLock.toggle(); break;
     case 'Home': if (homeView) flyTo(homeView.position, homeView.target); break;
     case '?': help.hidden = !help.hidden; break;
     default: return;

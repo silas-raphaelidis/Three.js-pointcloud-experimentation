@@ -137,3 +137,32 @@ canvas { display: block; }
 #legend .smoothing .value { color: #9aa3ad; font-variant-numeric: tabular-nums; }
 #legend .smoothing input { width: 100%; margin: 6px 0 2px; accent-color: #9fd3ff; }
 #legend .smoothing .hint { color: #9aa3ad; font-size: 11px; }
+
+#trail-lock {
+  position: fixed; left: 12px; top: 50%; transform: translateY(-50%); z-index: 6;
+  width: 40px; height: 40px; display: grid; place-items: center;
+  color: #c9d0d8; background: rgba(18, 22, 28, 0.88);
+  border: 1px solid #2f3746; border-radius: 10px; cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+#trail-lock:hover { background: rgba(36, 42, 52, 0.95); }
+#trail-lock.locked { color: #ffd34d; border-color: rgba(255, 211, 77, 0.55); background: rgba(48, 40, 12, 0.9); }
+#trail-lock.shake { animation: lock-shake 0.45s ease; }
+@keyframes lock-shake {
+  0%, 100% { transform: translateY(-50%) translateX(0); }
+  20% { transform: translateY(-50%) translateX(-5px) rotate(-6deg); }
+  40% { transform: translateY(-50%) translateX(5px) rotate(6deg); }
+  60% { transform: translateY(-50%) translateX(-3px) rotate(-3deg); }
+  80% { transform: translateY(-50%) translateX(3px) rotate(3deg); }
+}
+
+#toast {
+  position: fixed; left: 50%; bottom: 48px; z-index: 12; transform: translate(-50%, 8px);
+  padding: 8px 14px; max-width: calc(100vw - 32px); text-align: center;
+  font: 13px/1.4 system-ui, sans-serif; color: #e6e9ee;
+  background: rgba(22, 26, 33, 0.95); border: 1px solid #2f3746; border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  opacity: 0; pointer-events: none; transition: opacity 0.2s, transform 0.2s;
+}
+#toast.visible { opacity: 1; transform: translate(-50%, 0); }
