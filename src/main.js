@@ -32,7 +32,9 @@ THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 1, 20000);
 camera.up.set(0, 0, 1);
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
+// No damping: the camera follows the mouse exactly and stops on release
+// (damping made it trail behind the hand, worse at lower frame rates).
+controls.enableDamping = false;
 controls.screenSpacePanning = false;
 
 // ---------- Point material ----------
@@ -609,9 +611,35 @@ help.innerHTML = `
     <tr><td>V &middot; H &middot; E</td><td>Vegetation &middot; height above ground &middot; shading</td></tr>
     <tr><td>G &middot; M</td><td>Ghost hidden trails (and let them be picked) &middot; ground surface</td></tr>
     <tr><td>[ ]</td><td>Point size</td></tr>
+    <tr><td>P</td><td>FPS counter</td></tr>
   </table>
   <p>Press ? to close</p>`;
 document.body.appendChild(help);
+
+// ---------- FPS counter ----------
+// Frames per second, plus average and worst frame time, over half-second windows.
+const fps = document.createElement('div');
+fps.id = 'fps';
+document.body.appendChild(fps);
+const fpsStats = { last: performance.now(), windowStart: performance.now(), frames: 0, worst: 0 };
+
+function tickFps() {
+  const now = performance.now();
+  const dt = now - fpsStats.last;
+  fpsStats.last = now;
+  fpsStats.frames++;
+  if (dt > fpsStats.worst) fpsStats.worst = dt;
+  const span = now - fpsStats.windowStart;
+  if (span >= 500) {
+    const rate = (fpsStats.frames * 1000) / span;
+    const avg = span / fpsStats.frames;
+    fps.textContent = `${rate.toFixed(0)} fps · ${avg.toFixed(1)} ms avg · ${fpsStats.worst.toFixed(1)} ms worst`;
+    fps.className = rate >= 50 ? 'good' : rate >= 30 ? 'ok' : 'bad';
+    fpsStats.windowStart = now;
+    fpsStats.frames = 0;
+    fpsStats.worst = 0;
+  }
+}
 
 // ---------- Keys ----------
 let edlOn = true;
@@ -635,6 +663,7 @@ addEventListener('keydown', (e) => {
     case 'f': case 'F': frameSelected(); break;
     case 'Home': if (homeView) flyTo(homeView.position, homeView.target); break;
     case '?': help.hidden = !help.hidden; break;
+    case 'p': case 'P': fps.hidden = !fps.hidden; break;
   }
 });
 
@@ -687,6 +716,7 @@ function renderOverlay() {
 }
 
 renderer.setAnimationLoop(() => {
+  tickFps();
   updateFlight();
   controls.update();
   uniforms.uTime.value = clock.getElapsedTime();

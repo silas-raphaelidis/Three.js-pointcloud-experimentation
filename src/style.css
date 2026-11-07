@@ -13,6 +13,15 @@ canvas { display: block; }
   background: rgba(159, 211, 255, 0.08); max-width: 560px;
 }
 
+#fps {
+  position: fixed; right: 12px; bottom: 12px; padding: 5px 9px;
+  font: 12px/1.3 ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums;
+  color: #e6e9ee; background: rgba(14, 17, 22, 0.75); border-radius: 6px; pointer-events: none;
+}
+#fps.good { color: #7ee2a0; }
+#fps.ok { color: #ffd34d; }
+#fps.bad { color: #ff8a80; }
+
 #help {
   position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
   padding: 16px 20px; max-height: 90vh; overflow: auto;
