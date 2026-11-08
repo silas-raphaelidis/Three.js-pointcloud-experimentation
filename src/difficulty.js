@@ -96,6 +96,13 @@ function changed() {
  */
 export const CRUX_MIN_LENGTH = 40;
 
+/**
+ * Meters the ground is averaged over before measuring a trail's pitch, about
+ * the width of a run. Fixed on purpose: the legend's smoothing slider is a
+ * display setting and must not change a trail's rating.
+ */
+export const TRAIL_GROUND_SMOOTHING = 10;
+
 /** Rating for a slope: { name, color, text, index }. */
 export function rate(slope) {
   const i = slope < thresholds[0] ? 0 : slope < thresholds[1] ? 1 : slope < thresholds[2] ? 2 : 3;

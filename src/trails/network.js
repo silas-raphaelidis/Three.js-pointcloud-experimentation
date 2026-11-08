@@ -90,10 +90,10 @@ export class TrailNetwork extends EventTarget {
   removePoint(trailId, index) {
     const t = this.trails.get(trailId);
     const [stop] = t.points.splice(index, 1);
+    this.#dropIfUnused(stop.node);
     if (t.points.length < 2) {
       this.removeTrail(trailId);
     } else {
-      this.#dropIfUnused(stop.node);
       this.#changed([trailId]);
     }
   }
@@ -132,6 +132,8 @@ export class TrailNetwork extends EventTarget {
       data.trails.map((t) => [t.id, { ...t, points: t.points.map((p) => ({ ...p })) }])
     );
     this.nextId = data.nextId;
+    // Older saves can contain stray points left behind by deleted trails.
+    for (const id of this.nodes.keys()) this.#dropIfUnused(id);
     this.#changed([...before, ...this.trails.keys()]);
   }
 

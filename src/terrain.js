@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { fetchWithRetry } from './retry.js';
+import { TRAIL_GROUND_SMOOTHING } from './difficulty.js';
 
 /**
  * Bare-earth height map: decoded from the packed PNG written by
@@ -67,6 +68,9 @@ export class Terrain {
     this.slopeTexture = new THREE.DataTexture(this.slopes, this.width, this.height, THREE.RedFormat, THREE.FloatType);
     this.slopeTexture.minFilter = this.slopeTexture.magFilter = THREE.NearestFilter;
     this.setSlopeSmoothing(slopeSmoothing);
+
+    // Lightly smoothed ground for measuring trail pitch (see trailStats).
+    this.trailHeights = Terrain.#boxBlur(heights, this.width, this.height, this.res, TRAIL_GROUND_SMOOTHING);
   }
 
   /**
@@ -79,8 +83,8 @@ export class Terrain {
     this.slopeSmoothing = span;
   }
 
-  /** Box-blur heights over a window ~`span` meters wide, then central-difference slope. */
-  static #smoothedSlopes(heights, w, h, res, span) {
+  /** Heights box-blurred over a window ~`span` meters wide. */
+  static #boxBlur(heights, w, h, res, span) {
     // Window is (2r + 1) cells wide, e.g. at 2 m cells: 6, 10, 14 … 42 m.
     const r = Math.max(1, Math.round((span / res - 1) / 2));
     const blur = (src, horizontal) => {
@@ -99,7 +103,12 @@ export class Terrain {
       }
       return out;
     };
-    const smooth = blur(blur(heights, true), false);
+    return blur(blur(heights, true), false);
+  }
+
+  /** Slope (rise/run) per cell of the ground averaged over ~`span` meters. */
+  static #smoothedSlopes(heights, w, h, res, span) {
+    const smooth = Terrain.#boxBlur(heights, w, h, res, span);
     const at = (i, j) => smooth[Math.min(h - 1, Math.max(0, j)) * w + Math.min(w - 1, Math.max(0, i))];
     const slopes = new Float32Array(w * h);
     for (let j = 0; j < h; j++) {
@@ -114,10 +123,19 @@ export class Terrain {
 
   /** Smoothed slope (rise/run) at local x, y, the value difficulty uses. */
   smoothSlopeAt(x, y) {
+    return this.#bilinear(this.slopes, x, y);
+  }
+
+  /** Lightly smoothed ground height at local x, y, used for trail pitch. */
+  trailHeightAt(x, y) {
+    return this.#bilinear(this.trailHeights, x, y);
+  }
+
+  #bilinear(field, x, y) {
     const [gx, gy] = this.#grid(x, y);
     const i = Math.floor(gx), j = Math.floor(gy);
     const fx = gx - i, fy = gy - j;
-    const s = (a, b) => this.slopes[Math.min(this.height - 1, Math.max(0, b)) * this.width + Math.min(this.width - 1, Math.max(0, a))];
+    const s = (a, b) => field[Math.min(this.height - 1, Math.max(0, b)) * this.width + Math.min(this.width - 1, Math.max(0, a))];
     return (s(i, j) * (1 - fx) + s(i + 1, j) * fx) * (1 - fy) + (s(i, j + 1) * (1 - fx) + s(i + 1, j + 1) * fx) * fy;
   }
 

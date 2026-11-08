@@ -828,13 +828,12 @@ const colorItem = (label, mode, shortcut) => ({
 
 // Edited thresholds: refresh the cursor readout and the selected trail's rating.
 onThresholdsChange(() => { pointerDirty = true; trailView?.recolor(); editor?.refresh(); });
-// Smoothing slider: recompute the slope map (colors, readout and ratings follow).
+// Smoothing slider: recompute the slope map. The map colors and cursor readout
+// follow it; trail ratings don't (they use their own fixed smoothing).
 onSmoothingChange((meters) => {
   if (!terrain) return;
   terrain.setSlopeSmoothing(meters);
-  trailView?.recolor();
   pointerDirty = true;
-  editor?.refresh();
 });
 
 // ---------- Menu bar ----------

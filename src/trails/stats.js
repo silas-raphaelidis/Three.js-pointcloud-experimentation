@@ -30,6 +30,9 @@ export function trailStats(samples, terrain, window = 30) {
   // Pitch at each sample: the drop along the trail over `window` meters
   // centered on it (shorter near the ends). This is the trail's own pitch,
   // so a traverse across a steep face rates easier than the fall line.
+  // Measured on lightly smoothed ground, so a bump right under the centerline
+  // (or nudging the line a few meters) doesn't change the rating.
+  const groundZ = samples.map((p) => terrain.trailHeightAt(p.x, p.y));
   const half = window / 2;
   const pitch = new Float32Array(n);
   let lo = 0, hi = 0;
@@ -37,7 +40,7 @@ export function trailStats(samples, terrain, window = 30) {
     while (s[i] - s[lo] > half) lo++;
     while (hi < n - 1 && s[hi + 1] - s[i] <= half) hi++;
     const ds = s[hi] - s[lo];
-    pitch[i] = ds > 0 ? Math.abs(z[hi] - z[lo]) / ds : 0;
+    pitch[i] = ds > 0 ? Math.abs(groundZ[hi] - groundZ[lo]) / ds : 0;
   }
 
   // Band of each segment, and the share of the trail's length in each band

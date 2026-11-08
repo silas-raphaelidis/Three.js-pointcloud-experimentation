@@ -177,7 +177,7 @@ export class TrailView {
     g.computeBoundingSphere();
   }
 
-  /** Re-read every trail's difficulty color (thresholds or smoothing changed). */
+  /** Re-read every trail's difficulty color (thresholds changed). */
   recolor() {
     for (const [id, obj] of this.trailObjects) obj.color = this.ratingColor(id);
     this.#applySelectionColor();
