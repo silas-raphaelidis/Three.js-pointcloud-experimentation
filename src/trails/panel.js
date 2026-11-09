@@ -8,7 +8,10 @@ import { RATINGS } from '../difficulty.js';
  * isn't interrupted by the many refreshes that happen as the mouse moves.
  */
 export class TrailPanel {
-  /** @param {{ onRename: (trailId: string, name: string) => void }} opts */
+  /**
+   * Builds the hidden panel and wires up the name field. Created once in main.js.
+   * @param {{ onRename: (trailId: string, name: string) => void }} opts
+   */
   constructor({ onRename }) {
     this.onRename = onRename;
     this.trailId = null;
@@ -27,6 +30,7 @@ export class TrailPanel {
     document.body.appendChild(this.el);
 
     this.name = this.el.querySelector('.name');
+    // Apply a changed name, or restore the old one if the field is empty.
     const commit = () => {
       const v = this.name.value.trim();
       if (this.trailId && v && v !== this.currentName) this.onRename(this.trailId, v);
@@ -41,6 +45,8 @@ export class TrailPanel {
   }
 
   /**
+   * Show the given state, or hide the panel for null.
+   * Called from onStatus in main.js on every editor refresh.
    * @param {null | {kind:'drawing', points:number}
    *   | {kind:'trail', trailId:string, name:string, stats:object|null,
    *      point: null | {index:number, count:number, junction:boolean, width:number}}} state
@@ -48,6 +54,7 @@ export class TrailPanel {
   render(state) {
     this.el.hidden = !state;
     if (!state) { this.trailId = null; return; }
+    // Find an element inside the panel.
     const q = (sel) => this.el.querySelector(sel);
 
     if (state.kind === 'drawing') {

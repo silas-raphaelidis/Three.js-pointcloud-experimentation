@@ -17,8 +17,9 @@ import { difficultyGLSL } from './difficulty.js';
  */
 export class GroundMesh {
   /**
+   * Created once in main.js when the height map arrives.
    * @param {import('./terrain.js').Terrain} terrain
-   * @param {object} uniforms  shared uniforms (height map, trail mask, time…)
+   * @param {object} uniforms  shared uniforms (height map, trail mask, time...)
    * @param {object} opts
    * @param {number} opts.step    sample every Nth height-map cell (2 -> 4 m)
    * @param {number} opts.sink    how far below the ground points, meters
@@ -80,6 +81,7 @@ export class GroundMesh {
     this.occluder.renderOrder = -1;
   }
 
+  /** Indexed triangle grid over the height map. Shared by the mesh and the occluder. */
   static #buildGeometry(terrain, step, sink) {
     const cols = Math.floor((terrain.width - 1) / step) + 1;
     const rows = Math.floor((terrain.height - 1) / step) + 1;

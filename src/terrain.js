@@ -12,6 +12,8 @@ import { TRAIL_GROUND_SMOOTHING } from './difficulty.js';
  */
 export class Terrain {
   /**
+   * Download and decode the height map, then build the Terrain.
+   * Used by load() in main.js, in parallel with the point cloud.
    * @param {string} baseUrl   URL prefix for ascutney-height.{png,json}
    * @param {THREE.Vector3} offset  UTM position of the scene origin
    * @param {{ slopeSmoothing?: number }} [opts]  meters to smooth slope over
@@ -43,6 +45,10 @@ export class Terrain {
     return new Terrain(meta, heights, offset, slopeSmoothing);
   }
 
+  /**
+   * Builds the GPU textures and the smoothed fields from decoded heights.
+   * Called only by Terrain.load.
+   */
   constructor(meta, heights, offset, slopeSmoothing = 10) {
     this.width = meta.width;
     this.height = meta.height;
@@ -75,8 +81,9 @@ export class Terrain {
   }
 
   /**
-   * Recompute the smoothed slope map, averaging the ground over about `span`
-   * meters first. Updates `slopes` and `slopeTexture` in place.
+   * Recompute the smoothed slope map, averaging the ground over about `span` meters first.
+   * Updates `slopes` and `slopeTexture` in place.
+   * Used by the constructor and by the legend's smoothing slider (through main.js).
    */
   setSlopeSmoothing(span) {
     this.slopes.set(Terrain.#smoothedSlopes(this.heights, this.width, this.height, this.res, span));
@@ -84,15 +91,20 @@ export class Terrain {
     this.slopeSmoothing = span;
   }
 
-  /** Heights box-blurred over a window ~`span` meters wide. */
+  /**
+   * Heights box-blurred over a window ~`span` meters wide.
+   * Used by #smoothedSlopes and to build trailHeights.
+   */
   static #boxBlur(heights, w, h, res, span) {
     // Window is (2r + 1) cells wide, e.g. at 2 m cells: 6, 10, 14 … 42 m.
     const r = Math.max(1, Math.round((span / res - 1) / 2));
+    // One blur pass along every row or column, using a running sum.
     const blur = (src, horizontal) => {
       const out = new Float32Array(src.length);
       const n = horizontal ? w : h;
       const lines = horizontal ? h : w;
       for (let l = 0; l < lines; l++) {
+        // Array index of position k along the current row or column.
         const idx = (k) => (horizontal ? l * w + k : k * w + l);
         // Running sum with clamped edges.
         let sum = 0;
@@ -107,9 +119,13 @@ export class Terrain {
     return blur(blur(heights, true), false);
   }
 
-  /** Slope (rise/run) per cell of the ground averaged over ~`span` meters. */
+  /**
+   * Slope (rise/run) per cell of the ground averaged over ~`span` meters.
+   * Used by setSlopeSmoothing.
+   */
   static #smoothedSlopes(heights, w, h, res, span) {
     const smooth = Terrain.#boxBlur(heights, w, h, res, span);
+    // Smoothed height at a cell, clamped to the map's edges.
     const at = (i, j) => smooth[Math.min(h - 1, Math.max(0, j)) * w + Math.min(w - 1, Math.max(0, i))];
     const slopes = new Float32Array(w * h);
     for (let j = 0; j < h; j++) {
@@ -122,16 +138,23 @@ export class Terrain {
     return slopes;
   }
 
-  /** Smoothed slope (rise/run) at local x, y, as shown on the difficulty map. */
+  /**
+   * Smoothed slope (rise/run) at local x, y, as shown on the difficulty map.
+   * Used by updateCursor in main.js, so the readout matches the color under the cursor.
+   */
   smoothSlopeAt(x, y) {
     return this.#bilinear(this.slopes, x, y);
   }
 
-  /** Lightly smoothed ground height at local x, y, used for trail pitch. */
+  /** Lightly smoothed ground height at local x, y. Used by trailStats to measure pitch. */
   trailHeightAt(x, y) {
     return this.#bilinear(this.trailHeights, x, y);
   }
 
+  /**
+   * Bilinear sample of any grid field at local x, y.
+   * Used by heightAt, smoothSlopeAt and trailHeightAt.
+   */
   #bilinear(field, x, y) {
     const [gx, gy] = this.#grid(x, y);
     const i = Math.floor(gx), j = Math.floor(gy);
@@ -141,31 +164,42 @@ export class Terrain {
     return (h00 * (1 - fx) + h10 * fx) * (1 - fy) + (h01 * (1 - fx) + h11 * fx) * fy;
   }
 
-  /** Grid-space coordinates (cell centers at integers) for a local x, y. */
+  /**
+   * Grid-space coordinates (cell centers at integers) for a local x, y.
+   * Used by #bilinear and contains.
+   */
   #grid(x, y) {
     return [(x - this.origin.x) / this.res - 0.5, (y - this.origin.y) / this.res - 0.5];
   }
 
-  /** A grid field's value at cell (i, j), clamped to the map's edges. */
+  /** A grid field's value at cell (i, j), clamped to the map's edges. Used by #bilinear. */
   #at(field, i, j) {
     i = Math.min(this.width - 1, Math.max(0, i));
     j = Math.min(this.height - 1, Math.max(0, j));
     return field[j * this.width + i];
   }
 
-  /** Is (x, y) over the map? Covers the full outer cells, matching the
-   *  bounding box raycast() clips to (cell centers sit half a cell in). */
+  /**
+   * Is (x, y) over the map? Covers the full outer cells, matching the bounding box
+   * raycast() clips to (cell centers sit half a cell in). Used by raycast.
+   */
   contains(x, y) {
     const [gx, gy] = this.#grid(x, y);
     return gx >= -0.5 && gy >= -0.5 && gx <= this.width - 0.5 && gy <= this.height - 0.5;
   }
 
-  /** Bilinearly interpolated ground height at local x, y. */
+  /**
+   * Bilinearly interpolated ground height at local x, y.
+   * Used anywhere something sits on the ground: overlays, picking, the camera clamp, trail length.
+   */
   heightAt(x, y) {
     return this.#bilinear(this.heights, x, y);
   }
 
-  /** Surface normal from central differences over one grid cell. */
+  /**
+   * Surface normal from central differences over one grid cell.
+   * Used by updateCursor in main.js to lay the cursor ring on the ground, and by slopeAt.
+   */
   normalAt(x, y, out = new THREE.Vector3()) {
     const d = this.res;
     const dzdx = (this.heightAt(x + d, y) - this.heightAt(x - d, y)) / (2 * d);
@@ -173,7 +207,7 @@ export class Terrain {
     return out.set(-dzdx, -dzdy, 1).normalize();
   }
 
-  /** Slope as rise/run (0.4 = 40 %). */
+  /** Unsmoothed slope as rise/run (0.4 = 40 %). Not called anywhere yet. */
   slopeAt(x, y) {
     const n = this.normalAt(x, y);
     return Math.sqrt(n.x * n.x + n.y * n.y) / n.z;
@@ -182,6 +216,7 @@ export class Terrain {
   /**
    * First intersection of a ray with the terrain, or null.
    * Steps along the ray at half a cell, then refines by bisection.
+   * Used for the cursor, editor picking, line-of-sight checks and camera retargeting.
    */
   raycast(ray, out = new THREE.Vector3()) {
     // Clip the ray to the terrain's bounding box first.
@@ -205,6 +240,7 @@ export class Terrain {
 
     const step = this.res * 0.5;
     const p = new THREE.Vector3();
+    // Height of the ray above the ground at distance tt; negative means underground.
     const above = (tt) => {
       ray.at(tt, p);
       return p.z - this.heightAt(p.x, p.y);
@@ -234,7 +270,10 @@ export class Terrain {
   }
 }
 
-/** GLSL helper: bilinear ground height from the height texture. */
+/**
+ * GLSL added to the point shader.
+ * terrainHeight(p): bilinear ground height from the height texture, matching heightAt on the CPU.
+ */
 export const terrainGLSL = /* glsl */ `
   uniform sampler2D uHeight;
   uniform vec2 uHeightOrigin;

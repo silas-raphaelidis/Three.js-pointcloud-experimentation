@@ -11,6 +11,7 @@
  * API. Every edit fires a 'change' event naming the trails it affected.
  */
 export class TrailNetwork extends EventTarget {
+  /** Starts empty. main.js creates the one shared network, and saved trails are loaded into it. */
   constructor() {
     super();
     this.nodes = new Map(); // id -> { id, x, y }
@@ -20,10 +21,15 @@ export class TrailNetwork extends EventTarget {
 
   // ---------- Queries ----------
 
+  /** Look up a node by id. Used throughout the editor, spline code and view. */
   node(id) { return this.nodes.get(id); }
+  /** Look up a trail by id. Used throughout the editor, and by the spline cache. */
   trail(id) { return this.trails.get(id); }
 
-  /** Trails that pass through a node. */
+  /**
+   * Ids of every trail that passes through a node.
+   * Used to find which trails a node move affects, to delete unused nodes, and by the editor for junctions.
+   */
   trailsUsingNode(nodeId) {
     const out = [];
     for (const t of this.trails.values()) {
@@ -32,10 +38,18 @@ export class TrailNetwork extends EventTarget {
     return out;
   }
 
+  /**
+   * True if more than one trail uses this node.
+   * Used by TrailView to color junction dots and by the editor for the trail panel.
+   */
   isJunction(nodeId) { return this.trailsUsingNode(nodeId).length > 1; }
 
   // ---------- Edits ----------
 
+  /**
+   * Create a node at local x, y and return its id.
+   * Used by addTrail and insertPoint whenever a stop is given as coordinates.
+   */
   addNode(x, y) {
     const id = `n${this.nextId++}`;
     this.nodes.set(id, { id, x, y });
@@ -43,8 +57,10 @@ export class TrailNetwork extends EventTarget {
   }
 
   /**
-   * Create a trail. Each point is either { x, y, width } (a new node) or
-   * { node, width } (an existing node, e.g. a branch start).
+   * Create a trail and return it. Each point is either { x, y, width } (a new node)
+   * or { node, width } (an existing node, e.g. a branch start).
+   * source and meta are stored and saved but not read yet; they are reserved for generated trails.
+   * Used by the editor when a trail or branch is started.
    */
   addTrail({ points = [], name, source = 'manual', meta = {} } = {}) {
     const id = `t${this.nextId++}`;
@@ -60,7 +76,10 @@ export class TrailNetwork extends EventTarget {
     return trail;
   }
 
-  /** Insert a stop at `index` (defaults to the end). */
+  /**
+   * Insert a stop at `index` (defaults to the end) and return its node id.
+   * Used by the editor to extend a trail being drawn, insert a point, and split a line for a branch.
+   */
   insertPoint(trailId, point, index) {
     const t = this.trails.get(trailId);
     const stop = { node: point.node ?? this.addNode(point.x, point.y), width: point.width };
@@ -69,6 +88,10 @@ export class TrailNetwork extends EventTarget {
     return stop.node;
   }
 
+  /**
+   * Move a node. Fires a change for every trail through it, so junctions stay connected.
+   * Used by the editor while a point is dragged.
+   */
   moveNode(nodeId, x, y) {
     const n = this.nodes.get(nodeId);
     n.x = x;
@@ -76,17 +99,25 @@ export class TrailNetwork extends EventTarget {
     this.#changed(this.trailsUsingNode(nodeId));
   }
 
+  /** Set a trail's name. Used by the editor (panel, right-click menu, automatic naming). */
   rename(trailId, name) {
     this.trails.get(trailId).name = name;
     this.#changed([trailId]);
   }
 
+  /**
+   * Set a trail's width at one stop. Width belongs to the stop, not the node.
+   * Used by the editor (width handles, - / = keys, right-click menu).
+   */
   setWidth(trailId, index, width) {
     this.trails.get(trailId).points[index].width = width;
     this.#changed([trailId]);
   }
 
-  /** Remove one stop. Trails left with fewer than 2 stops are removed. */
+  /**
+   * Remove one stop. A trail left with fewer than 2 stops is removed entirely.
+   * Used by the editor (Delete key and right-click menu).
+   */
   removePoint(trailId, index) {
     const t = this.trails.get(trailId);
     const [stop] = t.points.splice(index, 1);
@@ -98,6 +129,10 @@ export class TrailNetwork extends EventTarget {
     }
   }
 
+  /**
+   * Delete a trail and any nodes only it used.
+   * Used by the editor (Delete trail, cancelled or too-short drawings) and by removePoint.
+   */
   removeTrail(trailId) {
     const t = this.trails.get(trailId);
     if (!t) return;
@@ -106,6 +141,7 @@ export class TrailNetwork extends EventTarget {
     this.#changed([trailId]);
   }
 
+  /** Remove every trail and node. Not called anywhere yet. */
   clear() {
     const ids = [...this.trails.keys()];
     this.trails.clear();
@@ -115,6 +151,10 @@ export class TrailNetwork extends EventTarget {
 
   // ---------- Saving ----------
 
+  /**
+   * Plain-data copy of the network.
+   * Used by main.js to save to localStorage and by the editor for undo snapshots.
+   */
   toJSON() {
     return {
       version: 1,
@@ -124,7 +164,10 @@ export class TrailNetwork extends EventTarget {
     };
   }
 
-  /** Replace everything with saved data. */
+  /**
+   * Replace everything with saved data, from toJSON.
+   * Used by main.js when restoring saved trails and by the editor for undo.
+   */
   load(data) {
     const before = [...this.trails.keys()];
     this.nodes = new Map(data.nodes.map((n) => [n.id, { ...n }]));
@@ -139,10 +182,15 @@ export class TrailNetwork extends EventTarget {
 
   // ---------- Internals ----------
 
+  /** Delete a node once no trail uses it. Used after every removal and on load. */
   #dropIfUnused(nodeId) {
     if (this.trailsUsingNode(nodeId).length === 0) this.nodes.delete(nodeId);
   }
 
+  /**
+   * Fire the change event naming the affected trails. Every edit ends here.
+   * main.js is the only listener: it queues the ids for processTrails, once per frame.
+   */
   #changed(trailIds) {
     this.dispatchEvent(new CustomEvent('change', { detail: { trails: new Set(trailIds) } }));
   }

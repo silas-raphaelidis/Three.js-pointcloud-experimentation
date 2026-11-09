@@ -33,6 +33,7 @@ const UNDO_LIMIT = 60;
  * calls onLocked() so the app can say so.
  */
 export class TrailEditor {
+  /** Attaches the mouse and keyboard listeners. Created once in setupTrails (main.js). */
   constructor({ network, geometry, terrain, camera, dom, controls, view, onStatus, onLocked }) {
     Object.assign(this, { network, geometry, terrain, camera, dom, controls, view, onStatus, onLocked });
     this.locked = false;
@@ -62,7 +63,10 @@ export class TrailEditor {
 
   // ---------- Public ----------
 
-  /** Lock or unlock trail selection. Locking finishes any drawing and deselects. */
+  /**
+   * Lock or unlock trail selection. Locking finishes any drawing and deselects.
+   * Used by the lock button (TrailLock, through main.js).
+   */
   setLocked(on) {
     this.locked = on;
     if (on) {
@@ -75,12 +79,18 @@ export class TrailEditor {
     this.refresh();
   }
 
-  /** Is something selectable under the mouse right now? (cursor highlight) */
+  /**
+   * Is something selectable under the mouse right now?
+   * Used by #onMove for the pointer cursor and by scaleCursor in main.js for the yellow ring.
+   */
   get hoveringSelectable() {
     return !this.locked && ['node', 'handle', 'line'].includes(this.hover?.type);
   }
 
-  /** Re-draw editor state (call after the network changes). */
+  /**
+   * Push the current selection, hover and drawing state to the view and trail panel.
+   * Called after every input event, by processTrails in main.js, and when thresholds change.
+   */
   refresh() {
     // Drop a selection that no longer exists (deleted / undone).
     if (this.selection) {
@@ -121,7 +131,10 @@ export class TrailEditor {
     this.onStatus?.(this.panelState());
   }
 
-  /** What the trail panel should show, or null when nothing is selected or drawn. */
+  /**
+   * What the trail panel should show, or null when nothing is selected or drawn.
+   * Used by refresh, which passes it to onStatus.
+   */
   panelState() {
     if (this.drawing) {
       return { kind: 'drawing', points: this.network.trail(this.drawing)?.points.length ?? 0 };
@@ -145,7 +158,7 @@ export class TrailEditor {
     };
   }
 
-  /** Rename a trail (undoable). */
+  /** Rename a trail (undoable). Used by the name field in the trail panel. */
   rename(trailId, name) {
     if (this.locked) { this.onLocked?.(); return; }
     this.#snapshot();
@@ -155,13 +168,18 @@ export class TrailEditor {
 
   // ---------- Geometry helpers ----------
 
+  /** The node at one stop of a trail. Used for the selected point and width dragging. */
   #stopNode(trailId, index) {
     return this.network.node(this.network.trail(trailId).points[index].node);
   }
 
-  /** Two handle positions across the trail at a control point. */
+  /**
+   * Two handle positions across the trail at a control point.
+   * Used by refresh to draw them and by #pick to grab them.
+   */
   #handlePositions(trailId, index) {
     const t = this.network.trail(trailId);
+    // Node at stop i, clamped to the ends of the trail.
     const P = (i) => this.network.node(t.points[Math.min(t.points.length - 1, Math.max(0, i))].node);
     const p = P(index);
     if (t.points.length < 2) return null;
@@ -176,7 +194,10 @@ export class TrailEditor {
     ];
   }
 
-  /** Line of sight from the camera to a point on the ground (lifted like the overlay). */
+  /**
+   * Line of sight from the camera to a point on the ground (lifted like the overlay).
+   * Used by #pick so things behind terrain can't be grabbed.
+   */
   #visible(p) {
     const target = new THREE.Vector3(p.x, p.y, this.terrain.heightAt(p.x, p.y) + 1.5);
     const from = this.camera.position;
@@ -187,19 +208,24 @@ export class TrailEditor {
     return !hit || hit.distanceTo(from) > dist - 3;
   }
 
+  /** Screen pixel for a ground position, or null if behind the camera. Used by #pick. */
   #toScreen(x, y) {
     const v = new THREE.Vector3(x, y, this.terrain.heightAt(x, y) + 1.5).project(this.camera);
     if (v.z > 1) return null; // behind the camera
     return { x: (v.x + 1) / 2 * innerWidth, y: (1 - v.y) / 2 * innerHeight };
   }
 
+  /** Terrain point under a screen position, or null. Used by #pick and #onMove. */
   #terrainAt(clientX, clientY) {
     this.ndc.set((clientX / innerWidth) * 2 - 1, -(clientY / innerHeight) * 2 + 1);
     this.raycaster.setFromCamera(this.ndc, this.camera);
     return this.terrain.raycast(this.raycaster.ray, this.hit) ? this.hit.clone() : null;
   }
 
-  /** What's under the mouse: a width handle, a point, a trail, or terrain. */
+  /**
+   * What's under the mouse: a width handle, a point, a trail, or terrain.
+   * Used by #onDown, #onMove and #openMenu.
+   */
   #pick(clientX, clientY) {
     // Screen distance to a ground point, or Infinity if it's off screen or
     // hidden behind terrain (unless hidden trails are ghosted, i.e. visible).
@@ -247,11 +273,16 @@ export class TrailEditor {
 
   // ---------- Edits ----------
 
+  /**
+   * Save the network for undo, keeping the last UNDO_LIMIT states.
+   * Called just before any undoable edit.
+   */
   #snapshot() {
     this.history.push(structuredClone(this.network.toJSON()));
     if (this.history.length > UNDO_LIMIT) this.history.shift();
   }
 
+  /** Restore the last snapshot and clear the current selection and drawing. Used by Ctrl+Z. */
   #undo() {
     const prev = this.history.pop();
     if (!prev) return;
@@ -261,6 +292,10 @@ export class TrailEditor {
     this.network.load(prev);
   }
 
+  /**
+   * Begin drawing a new trail from its first stop.
+   * Used by the "Start new trail here" menu item and #branchFromNode.
+   */
   #startTrail(first) {
     this.#snapshot();
     // Named for real when finished, once its difficulty is known.
@@ -269,10 +304,18 @@ export class TrailEditor {
     this.selection = null;
   }
 
+  /**
+   * Begin drawing a branch from an existing point.
+   * Used by Shift-click on a point, the B key and the right-click menu.
+   */
   #branchFromNode(nodeId) {
     this.#startTrail({ node: nodeId, width: Math.min(this.defaultWidth, 24) });
   }
 
+  /**
+   * Add a point on a trail at the picked spot and begin a branch from it.
+   * Used by Shift-click on a trail line and the right-click menu.
+   */
   #branchFromLine(h) {
     this.#snapshot();
     const nodeId = this.network.insertPoint(h.trailId, { x: h.x, y: h.y, width: h.w }, h.seg + 1);
@@ -281,12 +324,20 @@ export class TrailEditor {
     this.selection = null;
   }
 
+  /**
+   * Add a point to a trail at the picked spot and select it.
+   * Used by double-clicking a trail and the right-click menu.
+   */
   #insertPoint(h) {
     this.#snapshot();
     this.network.insertPoint(h.trailId, { x: h.x, y: h.y, width: h.w }, h.seg + 1);
     this.selection = { trailId: h.trailId, index: h.seg + 1 };
   }
 
+  /**
+   * Add a click to the trail being drawn, snapping to a node if one was clicked.
+   * A node already on this trail is ignored. Used by #onUp.
+   */
   #addDrawingPoint(target) {
     const t = this.network.trail(this.drawing);
     const width = t.points[t.points.length - 1].width;
@@ -298,6 +349,10 @@ export class TrailEditor {
     }
   }
 
+  /**
+   * End the current drawing. Too short: removed. Otherwise named and selected.
+   * Used by double-click, Enter, the right-click menu and locking.
+   */
   #finishDrawing() {
     if (!this.drawing) return;
     const id = this.drawing;
@@ -311,7 +366,7 @@ export class TrailEditor {
     }
   }
 
-  /** Name a finished trail from the run-name list for its difficulty. */
+  /** Name a finished trail from the run-name list for its difficulty. Used by #finishDrawing. */
   #giveDefaultName(t) {
     const samples = sampleSpline(this.geometry.controlPoints(t));
     const rating = trailStats(samples, this.terrain)?.rating.index ?? 0;
@@ -319,6 +374,7 @@ export class TrailEditor {
     this.network.rename(t.id, pickRunName(rating, used));
   }
 
+  /** Throw away the trail being drawn. Used by Esc and the right-click menu. */
   #cancelDrawing() {
     if (!this.drawing) return;
     const id = this.drawing;
@@ -326,6 +382,10 @@ export class TrailEditor {
     this.network.removeTrail(id);
   }
 
+  /**
+   * Select a point, staying on the selected trail if it passes through that node.
+   * Used by #onDown.
+   */
   #selectNode(nodeId) {
     const sel = this.selection;
     const selTrail = sel && this.network.trail(sel.trailId);
@@ -340,16 +400,18 @@ export class TrailEditor {
 
   // ---------- Right-click menu ----------
 
-  /** Build the menu for whatever is under the cursor. */
+  /** Build the right-click menu for whatever is under the cursor. Used by #onUp. */
   #openMenu(x, y) {
     if (this.locked) {
       this.onLocked?.();
       return;
     }
     const h = this.#pick(x, y);
+    // Wrap a menu action so the display refreshes after it.
     const edit = (fn) => () => { fn(); this.refresh(); };
     // Width fields snapshot once per menu, so typing "45" is one undo step.
     let snapped = false;
+    // Take the undo snapshot the first time a width field changes.
     const snapOnce = () => { if (!snapped) { this.#snapshot(); snapped = true; } };
     const items = [];
 
@@ -416,6 +478,10 @@ export class TrailEditor {
 
   // ---------- Input ----------
 
+  /**
+   * Pointer press. Grabs points and handles right away; anything else waits for release
+   * so a drag can still orbit the camera. Runs before OrbitControls (capture phase).
+   */
   #onDown(e) {
     if (e.button === 2) {
       this.rightPress = { x: e.clientX, y: e.clientY };
@@ -451,6 +517,7 @@ export class TrailEditor {
     this.refresh();
   }
 
+  /** Pointer move: track the cursor, then drag whatever is held or update the hover. */
   #onMove(e) {
     const world = this.#terrainAt(e.clientX, e.clientY);
     this.cursorWorld = world;
@@ -470,6 +537,10 @@ export class TrailEditor {
     this.refresh();
   }
 
+  /**
+   * Pointer release: returns the camera if it was taken, then treats a short press
+   * as a click (select, add a point, branch). A right-click opens the menu.
+   */
   #onUp(e) {
     if (e.button === 2) {
       const rp = this.rightPress;
@@ -516,6 +587,10 @@ export class TrailEditor {
     this.refresh();
   }
 
+  /**
+   * Editing shortcuts: undo, Enter, Esc, Delete, B, and - / =.
+   * View shortcuts live in main.js.
+   */
   #onKey(e) {
     // Don't treat typing in a menu field (width, rename) as shortcuts.
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;

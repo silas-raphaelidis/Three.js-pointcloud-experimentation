@@ -8,6 +8,7 @@
  *   { ..., danger: true }                     red row (deletes)
  */
 export class ContextMenu {
+  /** Builds the hidden menu and its close-on-outside listeners. Created once by TrailEditor. */
   constructor() {
     this.el = document.createElement('div');
     this.el.className = 'context-menu';
@@ -22,8 +23,10 @@ export class ContextMenu {
     this.el.addEventListener('contextmenu', (e) => e.preventDefault());
   }
 
+  /** Is the menu showing? Used by its own Escape handler. */
   get isOpen() { return !this.el.hidden; }
 
+  /** Show the menu at a screen position, kept on screen. Used by TrailEditor.#openMenu. */
   open(x, y, items) {
     this.el.replaceChildren(...items.map((item) => this.#row(item)));
     this.el.hidden = false;
@@ -33,8 +36,10 @@ export class ContextMenu {
     this.el.style.top = `${Math.min(y, innerHeight - r.height - 8)}px`;
   }
 
+  /** Hide the menu. Used by the close listeners and when a row is used. */
   close() { this.el.hidden = true; }
 
+  /** Build the DOM for one menu item (see the item types at the top). Used by open. */
   #row(item) {
     const row = document.createElement('div');
     if (item.type === 'separator') {

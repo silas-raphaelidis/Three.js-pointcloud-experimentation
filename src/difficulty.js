@@ -23,6 +23,7 @@ export const RATINGS = [
 const listeners = new Set();
 let thresholds = load();
 
+/** Saved thresholds, or the defaults. Runs once when this module loads. */
 function load() {
   try {
     const saved = JSON.parse(localStorage.getItem(SAVE_KEY));
@@ -31,10 +32,16 @@ function load() {
   return [...DEFAULTS];
 }
 
-/** Current boundaries [green|blue, blue|black, black|double]. */
+/**
+ * Copy of the current boundaries [green|blue, blue|black, black|double].
+ * Used by changed() to pass them to listeners.
+ */
 export function getThresholds() { return [...thresholds]; }
 
-/** Set one boundary (index 0..2); kept in order with at least 1 % between. */
+/**
+ * Set one boundary (index 0..2), kept in order with at least 1 % between.
+ * Used by the legend's number fields.
+ */
 export function setThreshold(index, value) {
   const lo = index === 0 ? 0.01 : thresholds[index - 1] + 0.01;
   const hi = index === 2 ? 3 : thresholds[index + 1] - 0.01;
@@ -42,6 +49,7 @@ export function setThreshold(index, value) {
   changed();
 }
 
+/** Restore the default boundaries. Used by the legend's Reset button. */
 export function resetThresholds() {
   thresholds = [...DEFAULTS];
   changed();
@@ -53,6 +61,7 @@ export function resetThresholds() {
 export const SMOOTHING = { min: 6, max: 42, step: 4, default: 10 };
 const SMOOTH_KEY = 'ascutney-slope-smoothing-v1';
 const smoothingListeners = new Set();
+/** Current smoothing distance: the saved value if valid, else the default. */
 let smoothing = (() => {
   try {
     const v = Number(localStorage.getItem(SMOOTH_KEY));
@@ -61,8 +70,13 @@ let smoothing = (() => {
   return SMOOTHING.default;
 })();
 
+/** Current smoothing distance, meters. Used by load() in main.js to build the slope map. */
 export function getSmoothing() { return smoothing; }
 
+/**
+ * Set the smoothing distance, clamp it, save it and notify listeners.
+ * Used by the legend's slider and Reset button.
+ */
 export function setSmoothing(meters) {
   const v = Math.min(SMOOTHING.max, Math.max(SMOOTHING.min, Math.round(meters)));
   if (v === smoothing) return;
@@ -71,18 +85,25 @@ export function setSmoothing(meters) {
   for (const fn of smoothingListeners) fn(v);
 }
 
-/** Call fn whenever the smoothing distance changes. */
+/**
+ * Call fn whenever the smoothing distance changes. Returns an unsubscribe function.
+ * Used by main.js to recompute the slope map, and by the legend to update its display.
+ */
 export function onSmoothingChange(fn) {
   smoothingListeners.add(fn);
   return () => smoothingListeners.delete(fn);
 }
 
-/** Call fn whenever thresholds change. Returns an unsubscribe function. */
+/**
+ * Call fn whenever thresholds change. Returns an unsubscribe function.
+ * Used by bindUniforms, main.js (cursor readout and trail colors) and the legend.
+ */
 export function onThresholdsChange(fn) {
   listeners.add(fn);
   return () => listeners.delete(fn);
 }
 
+/** Save the thresholds and notify listeners. Used by setThreshold and resetThresholds. */
 function changed() {
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(thresholds)); } catch { /* ignore */ }
   for (const fn of listeners) fn(getThresholds());
@@ -103,13 +124,19 @@ export const CRUX_MIN_LENGTH = 40;
  */
 export const TRAIL_GROUND_SMOOTHING = 10;
 
-/** Rating for a slope: { name, color, text, index }. */
+/**
+ * Rating for a slope: { name, color, text, index }.
+ * Used by trailStats for every trail segment and by difficulty() for the cursor.
+ */
 export function rate(slope) {
   const i = slope < thresholds[0] ? 0 : slope < thresholds[1] ? 1 : slope < thresholds[2] ? 2 : 3;
   return { ...RATINGS[i], index: i };
 }
 
-/** Uniforms for the shaders; keep them updated with `bindUniforms`. */
+/**
+ * Shader uniforms for the thresholds and band colors.
+ * Used by main.js when building the shared uniforms. Pair with bindUniforms to keep them current.
+ */
 export function difficultyUniforms() {
   return {
     uThresh: { value: new THREE.Vector3(...thresholds) },
@@ -120,13 +147,15 @@ export function difficultyUniforms() {
   };
 }
 
+/** Keep uThresh in step with the thresholds. Used once by main.js. */
 export function bindUniforms(uniforms) {
   onThresholdsChange((t) => uniforms.uThresh.value.set(...t));
 }
 
 /**
- * GLSL: smoothed slope lookup (uSlope, same grid as the height map) and the
- * band colors. Hard bands with a thin soft edge (EDGE, in slope units).
+ * GLSL added to the point and ground shaders.
+ * slopeAt(p): bilinear lookup in the smoothed slope map (uSlope, same grid as the height map).
+ * difficultyColor(s): band color for a slope. Hard bands with a thin soft edge (EDGE, in slope units).
  */
 export const difficultyGLSL = /* glsl */ `
   uniform sampler2D uSlope;
@@ -156,10 +185,15 @@ export const difficultyGLSL = /* glsl */ `
   }
 `;
 
+/** Slope (rise/run) as whole degrees. Used by the legend's "In degrees" line. */
 const toDegrees = (slope) => Math.round(THREE.MathUtils.radToDeg(Math.atan(slope)));
 
 /** Legend panel (right side) with editable thresholds. */
 export class DifficultyLegend {
+  /**
+   * Builds the hidden legend and keeps it in step with any threshold or smoothing change.
+   * Created once in main.js.
+   */
   constructor() {
     this.el = document.createElement('div');
     this.el.id = 'legend';
@@ -170,11 +204,15 @@ export class DifficultyLegend {
     onSmoothingChange(() => this.#syncInputs());
   }
 
+  /** Show or hide the legend. Used by setColorMode in main.js for the difficulty view. */
   show(on) { this.el.hidden = !on; }
 
+  /** Build the legend's HTML and wire up its inputs. Runs once, from the constructor. */
   #render() {
+    // Slope as a whole percentage.
     const pct = (v) => Math.round(v * 100);
     const t = thresholds;
+    // HTML for the number field editing threshold i.
     const input = (i) => `<input type="number" data-i="${i}" min="1" max="300" step="1" value="${pct(t[i])}">%`;
     this.el.innerHTML = `
       <div class="title">Slope difficulty</div>
@@ -210,6 +248,10 @@ export class DifficultyLegend {
     this.#syncInputs();
   }
 
+  /**
+   * Copy current values into the inputs, skipping the one being typed in.
+   * Runs after any threshold or smoothing change.
+   */
   #syncInputs() {
     const t = thresholds;
     this.el.querySelectorAll('input[data-i]').forEach((el) => {

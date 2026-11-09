@@ -56,7 +56,8 @@ export const RUN_NAMES = [
 
 /**
  * An unused name for a trail of the given rating (0 green .. 3 double black).
- * Falls back to "<name> II", "<name> III"… if every name is taken.
+ * Falls back to "<name> II", "<name> III"... if every name is taken.
+ * Used by the editor when a trail is finished.
  */
 export function pickRunName(ratingIndex, usedNames) {
   const list = RUN_NAMES[Math.max(0, Math.min(3, ratingIndex))];

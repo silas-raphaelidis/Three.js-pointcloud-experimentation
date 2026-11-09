@@ -9,8 +9,12 @@
 const ALPHA = 0.5;
 const EPS = 1e-4;
 
-/** Point on the centripetal Catmull-Rom segment p1 -> p2 at t in [0, 1]. */
+/**
+ * Point on the centripetal Catmull-Rom segment p1 -> p2 at t in [0, 1].
+ * Used by sampleSpline for every sample.
+ */
 function catmullRom(p0, p1, p2, p3, t) {
+  // Parameter spacing between two points; this is what makes it centripetal.
   const knot = (a, b) => Math.max(EPS, Math.hypot(b.x - a.x, b.y - a.y) ** ALPHA);
   const t0 = 0;
   const t1 = t0 + knot(p0, p1);
@@ -18,6 +22,7 @@ function catmullRom(p0, p1, p2, p3, t) {
   const t3 = t2 + knot(p2, p3);
   const u = t1 + (t2 - t1) * t;
 
+  // Interpolate between two points at u, given their parameter values.
   const lerp = (a, b, ta, tb) => {
     const w = (u - ta) / (tb - ta);
     return { x: a.x + (b.x - a.x) * w, y: a.y + (b.y - a.y) * w };
@@ -30,12 +35,14 @@ function catmullRom(p0, p1, p2, p3, t) {
   return lerp(b1, b2, t1, t2);
 }
 
+/** Smoothstep easing. Used by sampleSpline to blend width between stops. */
 const smooth = (t) => t * t * (3 - 2 * t);
 
 /**
- * Sample a list of control points [{ x, y, width }] into roughly evenly
- * spaced samples [{ x, y, w, s, seg }] where s is distance along the trail
- * and seg is the control segment (seg i runs from point i to point i + 1).
+ * Sample control points [{ x, y, width }] into roughly evenly spaced samples
+ * [{ x, y, w, s, seg, t }]. s is distance along the trail, seg is the control segment
+ * (seg i runs from point i to point i + 1), and t is the position within it.
+ * Used by TrailGeometry.update and by the editor when naming a finished trail.
  */
 export function sampleSpline(ctrl, step = 2) {
   const n = ctrl.length;
@@ -45,6 +52,7 @@ export function sampleSpline(ctrl, step = 2) {
   // Phantom end points continue the first/last segment in a straight line.
   const first = { x: 2 * ctrl[0].x - ctrl[1].x, y: 2 * ctrl[0].y - ctrl[1].y };
   const last = { x: 2 * ctrl[n - 1].x - ctrl[n - 2].x, y: 2 * ctrl[n - 1].y - ctrl[n - 2].y };
+  // Control point i, or a phantom end point when i is past either end.
   const P = (i) => (i < 0 ? first : i >= n ? last : ctrl[i]);
 
   const out = [];
@@ -74,6 +82,7 @@ export function sampleSpline(ctrl, step = 2) {
  */
 export class TrailGeometry {
   /**
+   * Used by setupTrails in main.js, which creates the single shared cache.
    * @param {import('./network.js').TrailNetwork} network
    * @param {number} feather soft edge added around every trail, meters
    */
@@ -83,10 +92,15 @@ export class TrailGeometry {
     this.cache = new Map(); // trailId -> { samples, box }
   }
 
+  /** Cached { samples, box } for a trail. Used by the view, editor and main.js. */
   get(trailId) { return this.cache.get(trailId); }
+  /** Every cached trail. Used by TrailRasterizer to re-stamp overlapping trails. */
   entries() { return this.cache.entries(); }
 
-  /** Control points of a trail with node positions resolved. */
+  /**
+   * A trail's stops as { x, y, width }, with node positions resolved.
+   * Used by update and by the editor when naming a finished trail.
+   */
   controlPoints(trail) {
     return trail.points.map((p) => {
       const n = this.network.node(p.node);
@@ -95,11 +109,13 @@ export class TrailGeometry {
   }
 
   /**
-   * Re-sample the given trails. Returns the world-space box covering both
-   * their old and new footprints (null if nothing to redraw).
+   * Re-sample the given trails. Returns the world-space box covering both their
+   * old and new footprints (null if nothing to redraw).
+   * Used by processTrails in main.js; the box tells the rasterizer what to recut.
    */
   update(trailIds) {
     let box = null;
+    // Expand the combined box to include b.
     const grow = (b) => {
       if (!b) return;
       box = box
@@ -130,8 +146,9 @@ export class TrailGeometry {
   }
 
   /**
-   * Closest point on any trail to (x, y). Returns { trailId, sample, dist,
-   * seg, t } where seg/t locate it between control points, or null.
+   * Closest point on any trail to (x, y). Returns { trailId, dist, x, y, w, seg, t },
+   * where seg and t locate it between control points, or null if there are no trails.
+   * Used by the editor's #pick. The onlyTrailId filter isn't used by any caller yet.
    */
   nearest(x, y, onlyTrailId = null) {
     let best = null;

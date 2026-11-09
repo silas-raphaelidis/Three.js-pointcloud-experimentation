@@ -14,6 +14,7 @@
  * changes to update anything already on screen.
  */
 export class MenuBar {
+  /** Creates the bar and its close-on-outside listeners. Created once in main.js. */
   constructor() {
     this.el = document.createElement('nav');
     this.el.id = 'menubar';
@@ -27,7 +28,7 @@ export class MenuBar {
     addEventListener('resize', () => this.close());
   }
 
-  /** A dropdown menu. */
+  /** Add a dropdown menu. Used by main.js for the View menu. */
   addMenu(label, items) {
     const wrap = document.createElement('div');
     wrap.className = 'menu';
@@ -48,7 +49,7 @@ export class MenuBar {
     return menu;
   }
 
-  /** A button on the bar that toggles something on and off. */
+  /** Add a button on the bar that toggles something on and off. Not called anywhere yet. */
   addToggleButton({ label, shortcut, get, set }) {
     const el = document.createElement('button');
     el.className = 'bar-toggle';
@@ -60,7 +61,7 @@ export class MenuBar {
     return el;
   }
 
-  /** A plain button on the bar. */
+  /** Add a plain button on the bar. Used by main.js for Controls. */
   addButton({ label, shortcut, action }) {
     const el = document.createElement('button');
     el.className = 'bar-button';
@@ -70,12 +71,13 @@ export class MenuBar {
     return el;
   }
 
-  /** Re-read every item's state (after a shortcut changed something). */
+  /** Re-read every item's state. Used after a keyboard shortcut or menu click changes something. */
   refresh() {
     for (const b of this.buttons) b.el.classList.toggle('active', !!b.get());
     if (this.open) this.#render(this.open);
   }
 
+  /** Close whichever menu is open. Used by the close listeners and when an action is chosen. */
   close() {
     if (!this.open) return;
     this.open.panel.hidden = true;
@@ -83,6 +85,7 @@ export class MenuBar {
     this.open = null;
   }
 
+  /** Open one menu, closing any other. Used by clicks and by hovering across the bar. */
   #openMenu(menu) {
     this.close();
     this.open = menu;
@@ -91,10 +94,12 @@ export class MenuBar {
     this.#render(menu);
   }
 
+  /** Rebuild an open menu's rows from current state. Used by #openMenu and refresh. */
   #render(menu) {
     menu.panel.replaceChildren(...menu.items.map((item) => this.#row(item)));
   }
 
+  /** Build the DOM for one menu item (see the item types at the top). Used by #render. */
   #row(item) {
     const row = document.createElement('div');
     if (item.type === 'separator') {
@@ -127,6 +132,7 @@ export class MenuBar {
 
     if (item.type === 'range') {
       row.className = 'row range';
+      // How to display the slider's value.
       const fmt = item.format ?? ((v) => v.toFixed(1));
       row.innerHTML = `<span class="check"></span><span class="label">${item.label}</span><span class="value">${fmt(item.get())}</span>`;
       const input = document.createElement('input');

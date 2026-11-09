@@ -2,6 +2,7 @@
  * Run an async task, retrying with increasing pauses if it throws.
  * Every failed attempt is logged with the label, so dropped requests show up
  * in the console with enough detail to spot a pattern.
+ * Used by load() in main.js for every point cloud request, and by fetchWithRetry.
  *
  * @template T
  * @param {() => Promise<T>} task
@@ -29,7 +30,10 @@ export async function withRetry(task, label, { attempts = 3, delayMs = 400 } = {
   throw lastError;
 }
 
-/** fetch() that treats HTTP errors (404, 500…) as failures too, with retries. */
+/**
+ * fetch() that treats HTTP errors (404, 500...) as failures too, with retries.
+ * Used by Terrain.load for the height map.
+ */
 export function fetchWithRetry(url, label = url) {
   return withRetry(async () => {
     const res = await fetch(url);

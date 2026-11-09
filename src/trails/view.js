@@ -14,7 +14,7 @@ const COLORS = {
   preview: 0x9fd3ff,
 };
 
-/** Round sprite so overlay points aren't squares. */
+/** Round sprite so overlay points aren't squares. Used once by the TrailView constructor. */
 function dotTexture() {
   const c = document.createElement('canvas');
   c.width = c.height = 64;
@@ -36,6 +36,7 @@ function dotTexture() {
  */
 export class TrailView {
   /**
+   * Created once in setupTrails (main.js).
    * @param {(trailId: string) => string} ratingColor  line color for a trail's difficulty
    */
   constructor(network, geometry, terrain, overlay, ratingColor) {
@@ -53,6 +54,7 @@ export class TrailView {
     this.hoverKey = '';
 
     const dot = dotTexture();
+    // Material for a set of round dots; no color means per-point vertex colors.
     const pointsMaterial = (size, color) =>
       new THREE.PointsMaterial({
         size, color, map: dot, sizeAttenuation: false, transparent: true,
@@ -86,16 +88,21 @@ export class TrailView {
     this.group.add(this.preview);
   }
 
+  /** Tell the fat lines the screen size. Used by setupTrails and the resize handler in main.js. */
   setResolution(w, h) {
     this.resolution.set(w, h);
     for (const { line } of this.trailObjects.values()) line.material.resolution.copy(this.resolution);
   }
 
+  /** Height to draw overlays at: the ground plus LIFT. Used by everything drawn here. */
   #ground(x, y) {
     return this.terrain.heightAt(x, y) + LIFT;
   }
 
-  /** Rebuild drawings for trails that changed, then refresh the node dots. */
+  /**
+   * Rebuild drawings for trails that changed, then refresh the node dots.
+   * Called by processTrails in main.js.
+   */
   update(trailIds) {
     for (const id of trailIds) {
       const old = this.trailObjects.get(id);
@@ -115,6 +122,7 @@ export class TrailView {
     this.#applySelectionColor();
   }
 
+  /** Create a trail's center line and cut edges. Used by update. */
   #buildTrail(id, samples) {
     const center = [];
     const left = [];
@@ -162,6 +170,7 @@ export class TrailView {
     return { line, edges, color: this.ratingColor(id) };
   }
 
+  /** Rebuild every node dot, with junctions in orange. Used by update. */
   #rebuildNodes() {
     const pos = [];
     const col = [];
@@ -177,14 +186,16 @@ export class TrailView {
     g.computeBoundingSphere();
   }
 
-  /** Re-read every trail's difficulty color (thresholds changed). */
+  /** Re-read every trail's difficulty color. Called from main.js when thresholds change. */
   recolor() {
     for (const [id, obj] of this.trailObjects) obj.color = this.ratingColor(id);
     this.#applySelectionColor();
   }
 
-  // Lines show each trail's difficulty color; selected or hovered trails are
-  // yellow (selected also drawn thicker).
+  /**
+   * Set each line's color and width: difficulty color normally; yellow when selected
+   * or hovered, with selected drawn thickest. Used by update, recolor and setState.
+   */
   #applySelectionColor() {
     for (const [id, obj] of this.trailObjects) {
       const selected = id === this.selectedTrail;
@@ -195,9 +206,10 @@ export class TrailView {
   }
 
   /**
-   * Show the current editor state.
+   * Show the current editor state. Called by TrailEditor.refresh.
    * @param {object} s
    * @param {string|null} s.selectedTrail
+   * @param {string[]} s.hoverTrails  trails to highlight
    * @param {{x:number,y:number}|null} s.highlightNode  node to ring
    * @param {Array<{x:number,y:number}>|null} s.handles  width handles
    * @param {{from:{x,y}, to:{x,y}}|null} s.preview      drawing preview
@@ -217,7 +229,10 @@ export class TrailView {
     if (preview) this.preview.computeLineDistances();
   }
 
-  /** Set a Points or Line object's vertices, placed on the ground. */
+  /**
+   * Set a Points or Line object's vertices, placed on the ground, and hide it if empty.
+   * Used by setState for the highlight, handles, width bar and preview.
+   */
   #setPoints(obj, pts) {
     const pos = pts.flatMap((p) => [p.x, p.y, this.#ground(p.x, p.y)]);
     obj.geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));

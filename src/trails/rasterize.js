@@ -5,6 +5,7 @@
  */
 export class TrailRasterizer {
   /**
+   * Created once in setupTrails (main.js).
    * @param {import('./spline.js').TrailGeometry} geometry
    * @param {import('./mask.js').TrailMask} mask
    */
@@ -13,6 +14,10 @@ export class TrailRasterizer {
     this.mask = mask;
   }
 
+  /**
+   * Recut the forest mask inside a world-space box. `now` starts the falling-trees animation.
+   * Called by processTrails in main.js with the box from TrailGeometry.update.
+   */
   rebuild(box, now) {
     if (!box) return;
     const clip = this.mask.cellsForBox(box);

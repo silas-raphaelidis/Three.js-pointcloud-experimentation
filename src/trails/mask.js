@@ -15,7 +15,10 @@ const NEVER = 1e9;
  * Only rows that change are re-uploaded to the GPU.
  */
 export class TrailMask {
-  /** @param {import('../terrain.js').Terrain} terrain */
+  /**
+   * Created once in setupTrails (main.js), lined up with the height map.
+   * @param {import('../terrain.js').Terrain} terrain
+   */
   constructor(terrain) {
     this.width = terrain.width;
     this.height = terrain.height;
@@ -31,7 +34,10 @@ export class TrailMask {
     this.dirty = null; // cell rectangle awaiting upload
   }
 
-  /** Cell rectangle covering a world-space box, clamped to the grid. */
+  /**
+   * Cell rectangle covering a world-space box, clamped to the grid, or null if off the map.
+   * Used by TrailRasterizer.rebuild.
+   */
   cellsForBox({ minX, minY, maxX, maxY }) {
     const i0 = Math.max(0, Math.floor((minX - this.origin.x) / this.res - 0.5));
     const i1 = Math.min(this.width - 1, Math.ceil((maxX - this.origin.x) / this.res - 0.5));
@@ -43,10 +49,13 @@ export class TrailMask {
   /**
    * Stamp a segment from a to b whose cleared width tapers from wa to wb,
    * with a soft `feather` edge. Only cells inside `clip` are touched.
+   * Used by TrailRasterizer for every pair of samples, inside rebuildRegion.
    */
   paintSegment(ax, ay, bx, by, wa, wb, feather, time, clip) {
     const r = (Math.max(wa, wb) / 2 + feather) / this.res;
+    // World x to grid column.
     const toI = (x) => (x - this.origin.x) / this.res - 0.5;
+    // World y to grid row.
     const toJ = (y) => (y - this.origin.y) / this.res - 0.5;
     const i0 = Math.max(clip.i0, Math.floor(Math.min(toI(ax), toI(bx)) - r));
     const i1 = Math.min(clip.i1, Math.ceil(Math.max(toI(ax), toI(bx)) + r));
@@ -79,6 +88,7 @@ export class TrailMask {
    * overlaps it (with time = now). Cells that were already cleared keep their
    * original cut time, so editing a trail doesn't replay its whole animation;
    * newly cleared cells animate from `now`; uncleared cells grow back.
+   * Used by TrailRasterizer.rebuild.
    */
   rebuildRegion(clip, now, paint) {
     const { i0, i1, j0, j1 } = clip;
@@ -107,6 +117,7 @@ export class TrailMask {
     this.#markDirty(clip);
   }
 
+  /** Grow the pending upload rectangle to cover a region. Used by rebuildRegion. */
   #markDirty({ i0, i1, j0, j1 }) {
     const d = this.dirty;
     this.dirty = d
@@ -114,7 +125,10 @@ export class TrailMask {
       : { i0, i1, j0, j1 };
   }
 
-  /** Upload changed rows to the GPU. Call once per frame. */
+  /**
+   * Mark the changed rows for upload to the GPU; three.js sends them at the next render.
+   * Called once per frame from the render loop in main.js.
+   */
   flush() {
     if (!this.dirty) return;
     const { i0, i1, j0, j1 } = this.dirty;
@@ -126,7 +140,10 @@ export class TrailMask {
   }
 }
 
-/** GLSL helper: trail strength (x) and cut time (y) at a local position. */
+/**
+ * GLSL added to the point and ground shaders.
+ * trailAt(p): trail strength (x) and cut time (y) at a local position.
+ */
 export const trailGLSL = /* glsl */ `
   uniform sampler2D uTrail;
   uniform float uHasTrail;

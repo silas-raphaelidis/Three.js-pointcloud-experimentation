@@ -81,6 +81,11 @@ const uniforms = {
   ...difficultyUniforms(),
 };
 bindDifficultyUniforms(uniforms);
+/**
+ * The material for every point chunk.
+ * Vertex shader: picks the color mode, flattens vegetation inside trails over time, sizes the point.
+ * hagColor(h) colors a point by height above ground. Fragment shader: rounds larger points.
+ */
 const material = new THREE.ShaderMaterial({
   uniforms,
   vertexShader: /* glsl */ `
@@ -179,6 +184,10 @@ const material = new THREE.ShaderMaterial({
   vertexColors: true,
 });
 
+/**
+ * Pixels per meter at distance 1, so the shader can size points in meters.
+ * Used at startup and on resize.
+ */
 function updateProjScale() {
   const h = renderer.domElement.height;
   uniforms.uProjScale.value = h / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
@@ -203,6 +212,10 @@ const edlUniforms = {
   uRadius: { value: 1.4 },
   uCap: { value: 0.03 }, // max darkening any one neighbour can contribute
 };
+/**
+ * Full-screen pass that shades the rendered points.
+ * logDepth(uv) reads a pixel's log depth (0 for background). Used by the frame loop when EDL is on.
+ */
 const edlScene = new THREE.Scene();
 const edlCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 edlScene.add(
@@ -250,6 +263,7 @@ edlScene.add(
   )
 );
 
+/** Match the EDL render target to the canvas. Used by the resize handler. */
 function resizeTargets() {
   renderer.getDrawingBufferSize(drawSize);
   sceneTarget.setSize(drawSize.x, drawSize.y);
@@ -265,6 +279,7 @@ const ramp = [
   [0.7, uniforms.uRamp2.value],
   [1.0, uniforms.uRamp3.value],
 ];
+/** GLSL for the ground mesh. groundRamp(z) is the same ramp as groundColor. */
 const groundRampGLSL = /* glsl */ `
   uniform vec3 uRamp0, uRamp1, uRamp2, uRamp3;
   uniform float uZRange;
@@ -275,6 +290,10 @@ const groundRampGLSL = /* glsl */ `
     return mix(uRamp2, uRamp3, (t - 0.7) / 0.3);
   }
 `;
+/**
+ * Color ramp position t (0..1) as a color, written into `out`.
+ * Used by loadChunk to color ground points.
+ */
 function groundColor(t, out) {
   for (let i = 1; i < ramp.length; i++) {
     if (t <= ramp[i][0]) {
@@ -297,6 +316,10 @@ let loadedPoints = 0;
 let totalPoints = 0;
 let loadStatus = '';
 let cursorInfo = '';
+/**
+ * Redraw the top-left info panel. `extra` replaces the load status when given.
+ * Used after loading and by updateCursor.
+ */
 function updateHud(extra) {
   if (extra !== undefined) loadStatus = extra;
   hud.innerHTML = `
@@ -338,6 +361,10 @@ renderer.domElement.addEventListener('pointerleave', () => {
   updateHud();
 });
 
+/**
+ * Move the cursor ring to the terrain under the mouse and update the readout.
+ * Runs each frame but only does work when the mouse or camera moved (pointerDirty).
+ */
 function updateCursor() {
   if (!terrain || !pointerDirty) return;
   pointerDirty = false;
@@ -365,7 +392,10 @@ function updateCursor() {
   updateHud();
 }
 
-// Keep the ring the same size on screen regardless of distance.
+/**
+ * Keep the ring the same size on screen regardless of distance, and turn it
+ * yellow over anything selectable. Runs each frame.
+ */
 function scaleCursor() {
   if (!cursor.visible) return;
   const dist = camera.position.distanceTo(cursor.position);
@@ -393,11 +423,13 @@ network.addEventListener('change', (e) => {
   for (const id of e.detail.trails) pendingTrails.add(id);
 });
 
+/** Create the trail objects once the height map exists. Called from load(). */
 function setupTrails(t) {
   geometry = new TrailGeometry(network, TRAIL_FEATHER);
   trailMask = new TrailMask(t);
   rasterizer = new TrailRasterizer(geometry, trailMask);
   // Trail lines are drawn in their difficulty color.
+  // Passed to TrailView, which calls it for each trail's color.
   const ratingColor = (id) => {
     const g = geometry.get(id);
     const st = g && trailStats(g.samples, t);
@@ -407,7 +439,7 @@ function setupTrails(t) {
   trailView.setResolution(innerWidth, innerHeight);
   editor = new TrailEditor({
     network, geometry, terrain: t, camera, dom: renderer.domElement, controls, view: trailView,
-    // Also keeps the menu bar's "Edit trails" button in sync with the T key.
+    // Keeps the trail panel and menu bar in step with the editor.
     onStatus: (state) => { trailPanel.render(state); menuBar.refresh(); },
     onLocked: () => trailLock.nudge(),
   });
@@ -417,6 +449,10 @@ function setupTrails(t) {
   // cut-into-the-forest animation is actually seen.
 }
 
+/**
+ * Restore trails from localStorage, or the optional preset file.
+ * Called at the end of load(), after the loading screen fades.
+ */
 async function loadSavedTrails() {
   try {
     const saved = localStorage.getItem(SAVE_KEY);
@@ -428,6 +464,7 @@ async function loadSavedTrails() {
   } catch { /* no preset: start empty */ }
 }
 
+/** Save to localStorage 400 ms after the last edit. Used by processTrails. */
 function saveTrailsSoon() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
@@ -435,7 +472,10 @@ function saveTrailsSoon() {
   }, 400);
 }
 
-/** Apply network edits once per frame: resample, re-cut, redraw, save. */
+/**
+ * Apply network edits once per frame: resample, re-cut, redraw, save.
+ * Called from the frame loop. pendingTrails is filled by the network's change event.
+ */
 function processTrails() {
   if (!pendingTrails.size || !geometry) return;
   const ids = [...pendingTrails];
@@ -458,6 +498,10 @@ window.trails = { network, get editor() { return editor; } };
 const loading = new LoadingScreen('Mount Ascutney');
 let ready = false;
 
+/**
+ * Load everything behind the loading screen, then reveal the scene.
+ * Runs once at startup.
+ */
 async function load() {
   loading.update(0.02, 'Preparing the LAZ decoder…');
   const lazPerf = await withRetry(() => createLazPerf({ locateFile: () => lazPerfWasmUrl }), 'LAZ decoder');
@@ -484,6 +528,7 @@ async function load() {
 
   // Progress: points are most of the work; the height map is the rest.
   let heightReady = false;
+  // Update the loading bar from points loaded and the height map's state.
   const progress = () => {
     const pts = totalPoints ? loadedPoints / totalPoints : 0;
     loading.update(
@@ -528,6 +573,10 @@ async function load() {
     .sort((a, b) => Number(a.split('-')[0]) - Number(b.split('-')[0]));
 
   const tmp = new THREE.Color();
+  /**
+   * Decode one octree chunk and add it to the scene as a Points object.
+   * Run by the six download workers below.
+   */
   async function loadChunk(key) {
     const node = nodes[key];
     const view = await Copc.loadPointDataView(FILE_URL, copc, node, {
@@ -629,6 +678,10 @@ controls.minDistance = 2;
 // the camera straight through the terrain.
 const _viewRay = new THREE.Ray();
 const _surface = new THREE.Vector3();
+/**
+ * Move the orbit center along the view line onto the terrain, so the view doesn't jump.
+ * Runs on every pointer press and wheel event, before OrbitControls.
+ */
 function retargetToSurface() {
   if (!terrain || flight) return;
   _viewRay.origin.copy(camera.position);
@@ -650,6 +703,7 @@ renderer.domElement.addEventListener('wheel', retargetToSurface, { capture: true
 
 // Safety net: never let the camera go below the ground.
 const CAMERA_CLEARANCE = 2; // meters above the terrain
+/** Push the camera back above the ground if it went under. Runs each frame. */
 function keepCameraAboveGround() {
   if (!terrain) return;
   const floor = terrain.heightAt(camera.position.x, camera.position.y) + CAMERA_CLEARANCE;
@@ -667,6 +721,7 @@ let homeView = null;
 let flight = null; // { from: {position, target}, to: {position, target}, t0 }
 const FLIGHT_S = 0.45;
 
+/** Start a smooth camera move. Used by frameBox and the Home view. */
 function flyTo(position, target) {
   flight = {
     from: { position: camera.position.clone(), target: controls.target.clone() },
@@ -675,6 +730,7 @@ function flyTo(position, target) {
   };
 }
 
+/** Advance the current camera move. Runs each frame. */
 function updateFlight() {
   if (!flight) return;
   const u = Math.min(1, (clock.getElapsedTime() - flight.t0) / FLIGHT_S);
@@ -684,7 +740,7 @@ function updateFlight() {
   if (u >= 1) flight = null;
 }
 
-/** Frame a world-space box, keeping the current viewing direction. */
+/** Frame a world-space box, keeping the current viewing direction. Used by frameSelected. */
 function frameBox(box) {
   const sphere = box.getBoundingSphere(new THREE.Sphere());
   const radius = Math.max(sphere.radius, 40);
@@ -693,7 +749,10 @@ function frameBox(box) {
   flyTo(sphere.center.clone().addScaledVector(dir, dist), sphere.center);
 }
 
-/** F: frame the selected point or trail (Blender's "View Selected"). */
+/**
+ * F: frame the selected point or trail (Blender's "View Selected").
+ * Used by the F key and the View menu.
+ */
 function frameSelected() {
   const sel = editor?.selection;
   if (!sel || !terrain) return;
@@ -753,6 +812,7 @@ fps.id = 'fps';
 document.body.appendChild(fps);
 const fpsStats = { last: performance.now(), windowStart: performance.now(), frames: 0, worst: 0 };
 
+/** Count a frame and refresh the FPS display every half second. Runs each frame. */
 function tickFps() {
   const now = performance.now();
   const dt = now - fpsStats.last;
@@ -808,18 +868,25 @@ const view = {
     set: (on) => { fps.hidden = !on; },
   },
 };
+/** Flip a view option. Used by the keyboard shortcuts. */
 const toggle = (opt) => opt.set(!opt.get());
 
 // "Color by" is one choice of three; the legend shows with the difficulty view.
 const COLOR = { natural: 0, height: 1, difficulty: 2 };
 const legend = new DifficultyLegend();
+/** Current color mode (a COLOR value). */
 const colorMode = () => uniforms.uColorMode.value;
+/**
+ * Change the color mode and show the legend for the difficulty view.
+ * Used by the View menu and toggleColorMode.
+ */
 function setColorMode(mode) {
   uniforms.uColorMode.value = mode;
   legend.show(mode === COLOR.difficulty);
 }
 /** Keys H / D: switch to that mode, or back to natural if it's already on. */
 const toggleColorMode = (mode) => setColorMode(colorMode() === mode ? COLOR.natural : mode);
+/** Build a View menu radio row for one color mode. */
 const colorItem = (label, mode, shortcut) => ({
   type: 'radio', label, shortcut,
   get: () => colorMode() === mode,
@@ -870,6 +937,7 @@ const trailLock = new TrailLock({ onChange: (locked) => editor?.setLocked(locked
 const trailPanel = new TrailPanel({ onRename: (id, name) => editor?.rename(id, name) });
 
 // ---------- Keys ----------
+// Is the user typing in a field? If so, the shortcuts below are ignored.
 const typing = (e) => e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
 
 addEventListener('keydown', (e) => {
@@ -914,6 +982,10 @@ renderer.domElement.addEventListener('pointerdown', () => renderer.domElement.fo
 const occluderScene = new THREE.Scene();
 let ground = null;
 
+/**
+ * Switch every overlay material between normal and faint no-depth-test drawing.
+ * Used by renderOverlay.
+ */
 function setOverlayGhost(ghost) {
   overlay.traverse((o) => {
     const m = o.material;
@@ -928,6 +1000,10 @@ function setOverlayGhost(ghost) {
   });
 }
 
+/**
+ * Draw trails and the cursor on top of the shaded scene, hidden by the ground.
+ * With ghosting on, draws the hidden parts faintly first. Runs each frame.
+ */
 function renderOverlay() {
   renderer.autoClear = false;
   renderer.clearDepth();

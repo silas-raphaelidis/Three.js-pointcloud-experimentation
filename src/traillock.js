@@ -16,7 +16,10 @@ const ICON_UNLOCKED = `
   </svg>`;
 
 export class TrailLock {
-  /** @param {{ onChange: (locked: boolean) => void }} opts */
+  /**
+   * Creates the button and toast message. Created once in main.js.
+   * @param {{ onChange: (locked: boolean) => void }} opts
+   */
   constructor({ onChange }) {
     this.onChange = onChange;
     this.locked = false;
@@ -34,8 +37,10 @@ export class TrailLock {
     this.#render();
   }
 
+  /** Flip the lock. Used by the button and the L key (main.js). */
   toggle() { this.set(!this.locked); }
 
+  /** Apply a lock state, update the icon, notify onChange and show a message. Used by toggle. */
   set(locked) {
     this.locked = locked;
     this.#render();
@@ -43,7 +48,10 @@ export class TrailLock {
     this.show(locked ? 'Trail selection locked' : 'Trail selection unlocked', 1200);
   }
 
-  /** Someone tried to select a trail while locked. */
+  /**
+   * Someone tried to select a trail while locked: shake the button and say so.
+   * Passed to TrailEditor as onLocked (main.js).
+   */
   nudge() {
     this.show('Trail selection is locked · press L or the lock to unlock');
     this.button.classList.remove('shake');
@@ -51,7 +59,7 @@ export class TrailLock {
     this.button.classList.add('shake');
   }
 
-  /** Brief message at the bottom of the screen. */
+  /** Brief message at the bottom of the screen. Used by set and nudge. */
   show(text, ms = 2200) {
     this.toast.textContent = text;
     this.toast.classList.add('visible');
@@ -59,6 +67,7 @@ export class TrailLock {
     this.toastTimer = setTimeout(() => this.toast.classList.remove('visible'), ms);
   }
 
+  /** Update the icon, tooltip and pressed state. Used by the constructor and set. */
   #render() {
     this.button.innerHTML = this.locked ? ICON_LOCKED : ICON_UNLOCKED;
     this.button.classList.toggle('locked', this.locked);

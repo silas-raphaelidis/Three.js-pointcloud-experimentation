@@ -5,13 +5,19 @@ import { rate, RATINGS, CRUX_MIN_LENGTH } from '../difficulty.js';
  * vertical, pitch breakdown by difficulty, and the trail's overall rating.
  */
 
-/** Rating for a single slope (cursor readout), using the shared thresholds. */
+/**
+ * Rating for a single slope as { name, color }, using the shared thresholds.
+ * Used by updateCursor in main.js for the cursor readout.
+ */
 export function difficulty(slope) {
   const r = rate(slope);
   return { name: r.name, color: r.text };
 }
 
 /**
+ * Measure a trail: length, vertical, pitch breakdown, and overall rating (its crux).
+ * Returns null for fewer than 2 samples. Used by the trail panel, the trail line color,
+ * and automatic naming.
  * @param {Array<{x:number,y:number,s:number}>} samples  sampled spline
  * @param {import('../terrain.js').Terrain} terrain
  * @param {number} window  distance the pitch is measured over along the trail, m
