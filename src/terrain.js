@@ -62,8 +62,9 @@ export class Terrain {
     this.texture.minFilter = this.texture.magFilter = THREE.NearestFilter;
     this.texture.needsUpdate = true;
 
-    // Smoothed slope (rise/run) per cell, for difficulty ratings: ratings are
-    // about sustained pitch, so single rocks and bumps shouldn't flip a cell.
+    // Smoothed slope (rise/run) per cell, for the difficulty map colors and the
+    // cursor readout: single rocks and bumps shouldn't flip a cell. Trail
+    // ratings don't use this (see trailHeights below).
     this.slopes = new Float32Array(heights.length);
     this.slopeTexture = new THREE.DataTexture(this.slopes, this.width, this.height, THREE.RedFormat, THREE.FloatType);
     this.slopeTexture.minFilter = this.slopeTexture.magFilter = THREE.NearestFilter;
@@ -121,7 +122,7 @@ export class Terrain {
     return slopes;
   }
 
-  /** Smoothed slope (rise/run) at local x, y, the value difficulty uses. */
+  /** Smoothed slope (rise/run) at local x, y, as shown on the difficulty map. */
   smoothSlopeAt(x, y) {
     return this.#bilinear(this.slopes, x, y);
   }
@@ -135,8 +136,9 @@ export class Terrain {
     const [gx, gy] = this.#grid(x, y);
     const i = Math.floor(gx), j = Math.floor(gy);
     const fx = gx - i, fy = gy - j;
-    const s = (a, b) => field[Math.min(this.height - 1, Math.max(0, b)) * this.width + Math.min(this.width - 1, Math.max(0, a))];
-    return (s(i, j) * (1 - fx) + s(i + 1, j) * fx) * (1 - fy) + (s(i, j + 1) * (1 - fx) + s(i + 1, j + 1) * fx) * fy;
+    const h00 = this.#at(field, i, j), h10 = this.#at(field, i + 1, j);
+    const h01 = this.#at(field, i, j + 1), h11 = this.#at(field, i + 1, j + 1);
+    return (h00 * (1 - fx) + h10 * fx) * (1 - fy) + (h01 * (1 - fx) + h11 * fx) * fy;
   }
 
   /** Grid-space coordinates (cell centers at integers) for a local x, y. */
@@ -144,10 +146,11 @@ export class Terrain {
     return [(x - this.origin.x) / this.res - 0.5, (y - this.origin.y) / this.res - 0.5];
   }
 
-  #at(i, j) {
+  /** A grid field's value at cell (i, j), clamped to the map's edges. */
+  #at(field, i, j) {
     i = Math.min(this.width - 1, Math.max(0, i));
     j = Math.min(this.height - 1, Math.max(0, j));
-    return this.heights[j * this.width + i];
+    return field[j * this.width + i];
   }
 
   /** Is (x, y) over the map? Covers the full outer cells, matching the
@@ -159,12 +162,7 @@ export class Terrain {
 
   /** Bilinearly interpolated ground height at local x, y. */
   heightAt(x, y) {
-    const [gx, gy] = this.#grid(x, y);
-    const i = Math.floor(gx), j = Math.floor(gy);
-    const fx = gx - i, fy = gy - j;
-    const h00 = this.#at(i, j), h10 = this.#at(i + 1, j);
-    const h01 = this.#at(i, j + 1), h11 = this.#at(i + 1, j + 1);
-    return (h00 * (1 - fx) + h10 * fx) * (1 - fy) + (h01 * (1 - fx) + h11 * fx) * fy;
+    return this.#bilinear(this.heights, x, y);
   }
 
   /** Surface normal from central differences over one grid cell. */
@@ -213,8 +211,7 @@ export class Terrain {
     };
 
     let prevT = t;
-    let prev = above(t);
-    if (prev < 0) return null; // starting underground
+    if (above(t) < 0) return null; // starting underground
     for (let n = 0; n < 40000; n++) {
       t += step;
       ray.at(t, p);
@@ -232,7 +229,6 @@ export class Terrain {
         return out;
       }
       prevT = t;
-      prev = cur;
     }
     return null;
   }

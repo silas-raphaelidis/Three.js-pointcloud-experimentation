@@ -6,7 +6,6 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 const LIFT = 1.5; // draw overlays slightly above the ground, meters
 
 const COLORS = {
-  line: 0xffffff,
   selected: 0xffd34d,
   edge: 0xffffff,
   node: 0xffffff,
@@ -137,9 +136,10 @@ export class TrailView {
 
     const geom = new LineGeometry();
     geom.setPositions(center);
+    // Color and width are set by #applySelectionColor, which update() runs next.
     const line = new Line2(
       geom,
-      new LineMaterial({ color: COLORS.line, linewidth: 2.5, transparent: true, opacity: 0.9, depthTest: false })
+      new LineMaterial({ transparent: true, opacity: 0.9, depthTest: false })
     );
     line.material.resolution.copy(this.resolution);
     line.renderOrder = 2;
@@ -212,19 +212,16 @@ export class TrailView {
     }
     this.#setPoints(this.highlight, highlightNode ? [highlightNode] : []);
     this.#setPoints(this.handles, handles ?? []);
-    this.#setLine(this.widthBar, handles ?? []);
-    this.#setLine(this.preview, preview ? [preview.from, preview.to] : []);
+    this.#setPoints(this.widthBar, handles ?? []);
+    this.#setPoints(this.preview, preview ? [preview.from, preview.to] : []);
     if (preview) this.preview.computeLineDistances();
   }
 
+  /** Set a Points or Line object's vertices, placed on the ground. */
   #setPoints(obj, pts) {
     const pos = pts.flatMap((p) => [p.x, p.y, this.#ground(p.x, p.y)]);
     obj.geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     obj.geometry.computeBoundingSphere();
     obj.visible = pts.length > 0;
-  }
-
-  #setLine(obj, pts) {
-    this.#setPoints(obj, pts);
   }
 }
