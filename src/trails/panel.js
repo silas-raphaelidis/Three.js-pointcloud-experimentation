@@ -47,8 +47,9 @@ export class TrailPanel {
   /**
    * Show the given state, or hide the panel for null.
    * Called from onStatus in main.js on every editor refresh.
-   * @param {null | {kind:'drawing', points:number}
-   *   | {kind:'trail', trailId:string, name:string, stats:object|null,
+   * @param {null | {kind:'drawing', lift:boolean, points:number}
+   *   | {kind:'generate', busy:boolean, rating:string}
+   *   | {kind:'trail', lift:boolean, trailId:string, name:string, stats:object|null,
    *      point: null | {index:number, count:number, junction:boolean, width:number}}} state
    */
   render(state) {
@@ -61,9 +62,23 @@ export class TrailPanel {
       this.trailId = null;
       this.name.hidden = true;
       q('.drawing').hidden = false;
-      q('.drawing').innerHTML = `<b>New trail</b> · ${state.points} point${state.points === 1 ? '' : 's'}`;
+      q('.drawing').innerHTML = state.lift
+        ? '<b>New lift</b>'
+        : `<b>New trail</b> · ${state.points} point${state.points === 1 ? '' : 's'}`;
       for (const s of ['.stats', '.bar', '.breakdown', '.point']) q(s).hidden = true;
-      q('.hint').textContent = 'Click to add points · double-click or Enter to finish · Esc to cancel';
+      q('.hint').textContent = state.lift
+        ? 'Click to place the other end · Esc to cancel'
+        : 'Click to add points · double-click or Enter to finish · Esc to cancel';
+      return;
+    }
+
+    if (state.kind === 'generate') {
+      this.trailId = null;
+      this.name.hidden = true;
+      q('.drawing').hidden = false;
+      q('.drawing').innerHTML = `<b>${state.busy ? 'Generating' : 'Generate'} ${state.rating} trail</b>`;
+      for (const s of ['.stats', '.bar', '.breakdown', '.point']) q(s).hidden = true;
+      q('.hint').textContent = state.busy ? 'Finding a route · Esc to cancel' : 'Click where it should end · Esc to cancel';
       return;
     }
 
@@ -77,8 +92,12 @@ export class TrailPanel {
     this.currentName = state.name;
 
     const st = state.stats;
-    for (const s of ['.stats', '.bar', '.breakdown']) q(s).hidden = !st;
-    if (st) {
+    q('.stats').hidden = !st;
+    // Lifts show their size only: they have no difficulty.
+    for (const s of ['.bar', '.breakdown']) q(s).hidden = !st || state.lift;
+    if (st && state.lift) {
+      q('.stats').textContent = `${st.length.toFixed(0)} m long · ${st.vertical.toFixed(0)} m vertical · lift`;
+    } else if (st) {
       q('.stats').innerHTML =
         `${st.length.toFixed(0)} m long · ${st.vertical.toFixed(0)} m vertical · ` +
         `<span class="rating" style="color:${st.rating.color}">${st.rating.name}</span>`;
@@ -97,6 +116,12 @@ export class TrailPanel {
     if (p) {
       q('.point').textContent =
         `Point ${p.index + 1}/${p.count}${p.junction ? ' (junction)' : ''} · width ${p.width.toFixed(0)} m`;
+    }
+    if (state.lift) {
+      q('.hint').textContent = p
+        ? 'Drag handles or − = for width · Del deletes the lift · B branches'
+        : 'Drag either end to move it · F to frame';
+      return;
     }
     q('.hint').textContent = p
       ? 'Drag handles or − = for width · Del removes · B branches'

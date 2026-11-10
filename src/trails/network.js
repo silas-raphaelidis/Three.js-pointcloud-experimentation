@@ -6,6 +6,9 @@
  *   trail's use of the node, so two trails sharing a junction can be
  *   different widths there (a skinny branch off a wide run).
  * - A BRANCH is a trail whose first node already belongs to another trail.
+ * - A LIFT is a trail with kind 'lift' and exactly two stops. It cuts the
+ *   forest like any trail, but isn't rated. Saves from before lifts existed
+ *   have no kind, and count as ordinary runs.
  *
  * Both the editor and (later) the pathfinder build trails only through this
  * API. Every edit fires a 'change' event naming the trails it affected.
@@ -15,7 +18,7 @@ export class TrailNetwork extends EventTarget {
   constructor() {
     super();
     this.nodes = new Map(); // id -> { id, x, y }
-    this.trails = new Map(); // id -> { id, name, source, meta, points: [{ node, width }] }
+    this.trails = new Map(); // id -> { id, name, kind, source, meta, points: [{ node, width }] }
     this.nextId = 1;
   }
 
@@ -25,6 +28,9 @@ export class TrailNetwork extends EventTarget {
   node(id) { return this.nodes.get(id); }
   /** Look up a trail by id. Used throughout the editor, and by the spline cache. */
   trail(id) { return this.trails.get(id); }
+
+  /** Is this trail a lift? Used by the editor and TrailView, which treat lifts differently. */
+  isLift(id) { return this.trails.get(id)?.kind === 'lift'; }
 
   /**
    * Ids of every trail that passes through a node.
@@ -60,13 +66,14 @@ export class TrailNetwork extends EventTarget {
    * Create a trail and return it. Each point is either { x, y, width } (a new node)
    * or { node, width } (an existing node, e.g. a branch start).
    * source and meta are stored and saved but not read yet; they are reserved for generated trails.
-   * Used by the editor when a trail or branch is started.
+   * kind is 'run' or 'lift'. Used by the editor when a trail, branch or lift is started.
    */
-  addTrail({ points = [], name, source = 'manual', meta = {} } = {}) {
+  addTrail({ points = [], name, kind = 'run', source = 'manual', meta = {} } = {}) {
     const id = `t${this.nextId++}`;
     const trail = {
       id,
       name: name ?? `Trail ${this.trails.size + 1}`,
+      kind,
       source,
       meta,
       points: points.map((p) => ({ node: p.node ?? this.addNode(p.x, p.y), width: p.width })),
@@ -141,7 +148,7 @@ export class TrailNetwork extends EventTarget {
     this.#changed([trailId]);
   }
 
-  /** Remove every trail and node. Not called anywhere yet. */
+  /** Remove every trail and node. Used by the editor when mountain generation replaces everything. */
   clear() {
     const ids = [...this.trails.keys()];
     this.trails.clear();

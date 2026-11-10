@@ -54,13 +54,25 @@ export const RUN_NAMES = [
   ],
 ];
 
+/** Default lift names, in the style of chairlifts around the US (compiled, not scraped). */
+export const LIFT_NAMES = [
+  'Summit Express', 'Mountain Express', 'Village Express', 'Peak Express', 'Ridge Express',
+  'Valley Express', 'Northside Express', 'Base Area Express', 'Sunrise Quad', 'Sunset Quad',
+  'Timberline Quad', 'North Peak Quad', 'South Peak Quad', 'Eagle Quad', 'Glades Quad',
+  'Skyline Chair', 'Sunnyside Chair', 'Treeline Chair', 'Hilltop Chair', 'Ridgeline Chair',
+  'Headwall Chair', 'Backside Chair', 'Lookout Chair', 'Meadow Chair', 'Summit Chair',
+  'Alpine Double', 'Mountain Double', 'Birch Double', 'Pine Knob Double', 'Old Summit Double',
+  'Stony Brook Triple', 'Cascade Triple', 'Spruce Triple', 'Maple Triple', 'Bear Hollow Triple',
+  'Sky Ride', 'Cloud Nine', 'Stairway', 'High Line', 'The Ladder',
+  'Upper Mountain Lift', 'Lower Mountain Lift', 'Base Lodge Lift', 'Beginner Chair', 'Learning Hill Lift',
+  'Sawmill Lift', 'Quarry Lift', 'Pinnacle Lift', 'Windham Line', 'Connector Lift',
+];
+
 /**
- * An unused name for a trail of the given rating (0 green .. 3 double black).
- * Falls back to "<name> II", "<name> III"... if every name is taken.
- * Used by the editor when a trail is finished.
+ * A random unused name from `list`, falling back to "<name> II", "<name> III"...
+ * if every name is taken. Used by pickRunName and pickLiftName.
  */
-export function pickRunName(ratingIndex, usedNames) {
-  const list = RUN_NAMES[Math.max(0, Math.min(3, ratingIndex))];
+function pickFrom(list, usedNames) {
   const used = new Set(usedNames);
   const free = list.filter((n) => !used.has(n));
   if (free.length) return free[Math.floor(Math.random() * free.length)];
@@ -69,4 +81,17 @@ export function pickRunName(ratingIndex, usedNames) {
     const candidates = list.map((n) => `${n} ${roman}`).filter((n) => !used.has(n));
     if (candidates.length) return candidates[Math.floor(Math.random() * candidates.length)];
   }
+}
+
+/**
+ * An unused name for a trail of the given rating (0 green .. 3 double black).
+ * Used by the editor when a trail is finished.
+ */
+export function pickRunName(ratingIndex, usedNames) {
+  return pickFrom(RUN_NAMES[Math.max(0, Math.min(3, ratingIndex))], usedNames);
+}
+
+/** An unused name for a lift. Used by the editor when a lift is finished. */
+export function pickLiftName(usedNames) {
+  return pickFrom(LIFT_NAMES, usedNames);
 }

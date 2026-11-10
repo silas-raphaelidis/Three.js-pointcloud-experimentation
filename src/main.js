@@ -10,6 +10,11 @@ import { TrailGeometry } from './trails/spline.js';
 import { TrailRasterizer } from './trails/rasterize.js';
 import { TrailView } from './trails/view.js';
 import { TrailEditor } from './trails/editor.js';
+import { TrailGenerator } from './trails/generator.js';
+import { AnalysisOverlay, overlayGLSL } from './mountain/overlay.js';
+import { MountainGenerator } from './mountain/generator.js';
+import { randomSeed } from './mountain/random.js';
+import { showToast } from './toast.js';
 import { difficulty, trailStats } from './trails/stats.js';
 import { TrailPanel } from './trails/panel.js';
 import { GroundMesh } from './ground.js';
@@ -78,6 +83,11 @@ const uniforms = {
   uZRange: { value: 1 },
   // Slope difficulty view: smoothed slope map + shared thresholds/colors.
   uSlope: { value: null },
+  // Mountain analysis debug tint (see mountain/overlay.js).
+  uOverlay: { value: null },
+  uOverlayOrigin: { value: new THREE.Vector2() },
+  uOverlayCell: { value: 1 },
+  uHasOverlay: { value: 0 },
   ...difficultyUniforms(),
 };
 bindDifficultyUniforms(uniforms);
@@ -103,6 +113,7 @@ const material = new THREE.ShaderMaterial({
     ${terrainGLSL}
     ${trailGLSL}
     ${difficultyGLSL}
+    ${overlayGLSL}
 
     // Height above ground -> color: blue at ground level, green at shrub
     // height, yellow/red for tall trees.
@@ -133,6 +144,10 @@ const material = new THREE.ShaderMaterial({
         } else if (uColorMode > 0.5) {
           vColor = hagColor(hag);
         }
+      }
+      if (uHasOverlay > 0.5) {
+        vec4 tint = overlayAt(pos.xy);
+        vColor = mix(vColor, tint.rgb, tint.a);
       }
 
       // ---- Trail clearing ----
@@ -416,6 +431,8 @@ let trailMask = null;
 let rasterizer = null;
 let trailView = null;
 let editor = null;
+let analysisOverlay = null;
+let mountainGenerator = null;
 const pendingTrails = new Set();
 let saveTimer = 0;
 
@@ -437,16 +454,42 @@ function setupTrails(t) {
   };
   trailView = new TrailView(network, geometry, t, overlay, ratingColor);
   trailView.setResolution(innerWidth, innerHeight);
+  const trailGenerator = new TrailGenerator({ network, geometry, terrain: t });
   editor = new TrailEditor({
     network, geometry, terrain: t, camera, dom: renderer.domElement, controls, view: trailView,
+    generator: trailGenerator,
     // Keeps the trail panel and menu bar in step with the editor.
     onStatus: (state) => { trailPanel.render(state); menuBar.refresh(); },
     onLocked: () => trailLock.nudge(),
   });
+  analysisOverlay = new AnalysisOverlay({ terrain: t, uniforms });
+  mountainGenerator = new MountainGenerator({ terrain: t, network, editor, trailGenerator });
   uniforms.uTrail.value = trailMask.texture;
   uniforms.uHasTrail.value = 1;
   // Saved trails are loaded after the loading screen fades, so their
   // cut-into-the-forest animation is actually seen.
+}
+
+/**
+ * TEMPORARY until the Generate mountain dialog exists: replace the network
+ * with 2 bases, 6 lifts and 16 runs from a random seed. Used by the J key.
+ */
+async function generateMountainForTesting() {
+  if (!mountainGenerator) return;
+  const seed = randomSeed();
+  showToast('Placing lifts…', 60000);
+  const result = await mountainGenerator.generate(
+    { bases: 2, lifts: 6, runs: 16, seed },
+    ({ runs }) => showToast(`Generating mountain · ${runs} run${runs === 1 ? '' : 's'} so far`, 60000),
+  );
+  if (!result) { showToast('Mountain generation failed.'); return; }
+  console.log(`[mountain] seed ${seed} · ${(result.ms / 1000).toFixed(1)} s`, result);
+  console.log('[mountain] runs (pass aimed→got kept): ' + result.attempts
+    .map((a) => `${a.pass[0]}${a.target}→${a.rating ?? 'x'}${a.kept ? '' : '✗'}`).join(' '));
+  if (result.stopped) { showToast('Mountain generation stopped.'); return; }
+  showToast(
+    `${result.lifts} lifts, ${result.runs} runs from ${result.bases} bases · seed ${seed}` +
+    (result.connected ? '' : ' · some lifts could not be connected'), 6000);
 }
 
 /**
@@ -549,6 +592,7 @@ async function load() {
     uniforms.uHasHeight.value = 1;
     uniforms.uSlope.value = t.slopeTexture;
     ground = new GroundMesh(t, uniforms, { step: 2, sink: 0.5, colorGLSL: groundRampGLSL });
+    ground.mesh.visible = groundOn;
     scene.add(ground.mesh);
     occluderScene.add(ground.occluder);
     setupTrails(t);
@@ -785,15 +829,17 @@ help.innerHTML = `
     <tr><td>F</td><td>Frame selected trail or point</td></tr>
     <tr><td>Home</td><td>Frame the whole mountain</td></tr>
     <tr><th colspan="2">Trails</th></tr>
-    <tr><td>Right-click terrain</td><td>Start a new trail</td></tr>
+    <tr><td>Right-click terrain</td><td>Start a new trail or lift</td></tr>
     <tr><td>Click terrain (drawing)</td><td>Add a point</td></tr>
     <tr><td>Double-click / Enter</td><td>Finish the trail</td></tr>
+    <tr><td>Second click (lift)</td><td>Place the other end</td></tr>
+    <tr><td>Right-click, pick a difficulty</td><td>Generate a trail, then click where it ends</td></tr>
     <tr><td>Right-click</td><td>Options for a point, trail or spot</td></tr>
     <tr><td>Click / double-click a trail</td><td>Select it / add a point</td></tr>
     <tr><td>Drag a point / handle</td><td>Move it / change width</td></tr>
     <tr><td>Shift-click a trail or point</td><td>Branch from there</td></tr>
     <tr><td>&minus; / =</td><td>Narrower / wider</td></tr>
-    <tr><td>Delete &middot; Ctrl+Z &middot; Esc</td><td>Remove point &middot; undo &middot; cancel</td></tr>
+    <tr><td>Delete &middot; Ctrl+Z &middot; Ctrl+Shift+Z &middot; Esc</td><td>Remove point &middot; undo &middot; redo &middot; cancel</td></tr>
     <tr><td>L</td><td>Lock / unlock trail selection</td></tr>
     <tr><th colspan="2">View</th></tr>
     <tr><td>V &middot; E</td><td>Vegetation &middot; shading</td></tr>
@@ -835,26 +881,27 @@ function tickFps() {
 // One place for every display toggle. The View menu and the keyboard
 // shortcuts both go through these, so they always agree.
 let edlOn = true;
+let groundOn = false; // applied to the ground mesh once it exists
 let ghostTrails = false;
 
 const view = {
   vegetation: {
-    label: 'Vegetation', shortcut: 'V',
+    label: 'Vegetation', shortcut: 'V', default: true,
     get: () => uniforms.uShowVeg.value > 0.5,
     set: (on) => { uniforms.uShowVeg.value = on ? 1 : 0; },
   },
   ground: {
-    label: 'Ground surface', shortcut: 'M',
-    get: () => ground?.mesh.visible ?? true,
-    set: (on) => { if (ground) ground.mesh.visible = on; },
+    label: 'Ground surface', shortcut: 'M', default: false,
+    get: () => groundOn,
+    set: (on) => { groundOn = on; if (ground) ground.mesh.visible = on; },
   },
   shading: {
-    label: 'Eye-Dome Lighting', shortcut: 'E',
+    label: 'Eye-Dome Lighting', shortcut: 'E', default: true,
     get: () => edlOn,
     set: (on) => { edlOn = on; },
   },
   ghost: {
-    label: 'Ghost hidden trails', shortcut: 'G',
+    label: 'Ghost hidden trails', shortcut: 'G', default: false,
     get: () => ghostTrails,
     set: (on) => {
       ghostTrails = on;
@@ -863,7 +910,7 @@ const view = {
     },
   },
   fps: {
-    label: 'FPS counter', shortcut: 'P',
+    label: 'FPS counter', shortcut: 'P', default: true,
     get: () => !fps.hidden,
     set: (on) => { fps.hidden = !on; },
   },
@@ -892,6 +939,18 @@ const colorItem = (label, mode, shortcut) => ({
   get: () => colorMode() === mode,
   set: () => setColorMode(mode),
 });
+
+const DEFAULT_POINT_SIZE = uniforms.uSize.value;
+/**
+ * Put everything the View menu controls back to how the page starts.
+ * Used by the View menu's "Reset to defaults". Leaves the camera and the
+ * legend's thresholds alone (the legend has its own reset).
+ */
+function resetView() {
+  for (const opt of Object.values(view)) opt.set(opt.default);
+  setColorMode(COLOR.natural);
+  uniforms.uSize.value = DEFAULT_POINT_SIZE;
+}
 
 // Edited thresholds: refresh the cursor readout and the selected trail's rating.
 onThresholdsChange(() => { pointerDirty = true; trailView?.recolor(); editor?.refresh(); });
@@ -927,6 +986,8 @@ menuBar.addMenu('View', [
   { type: 'separator' },
   { type: 'action', label: 'Frame selected', shortcut: 'F', action: () => frameSelected(), enabled: () => !!editor?.selection },
   { type: 'action', label: 'Frame whole mountain', shortcut: 'Home', action: () => homeView && flyTo(homeView.position, homeView.target) },
+  { type: 'separator' },
+  { type: 'action', label: 'Reset to defaults', action: resetView },
 ]);
 menuBar.addButton({ label: 'Controls', shortcut: '?', action: () => { help.hidden = !help.hidden; } });
 
@@ -956,6 +1017,8 @@ addEventListener('keydown', (e) => {
     case 'l': case 'L': trailLock.toggle(); break;
     case 'Home': if (homeView) flyTo(homeView.position, homeView.target); break;
     case '?': help.hidden = !help.hidden; break;
+    case 'k': case 'K': analysisOverlay?.cycle(); break; // temporary debug view
+    case 'j': case 'J': generateMountainForTesting(); break; // temporary
     default: return;
   }
   menuBar.refresh();

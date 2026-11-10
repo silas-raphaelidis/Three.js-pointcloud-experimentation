@@ -188,3 +188,5 @@ canvas { display: block; }
 #trail-panel .breakdown { color: #9aa3ad; font-size: 12px; }
 #trail-panel .point { margin-top: 6px; }
 #trail-panel .hint { margin-top: 6px; color: #9aa3ad; font-size: 12px; }
+/* Rules like .bar set display, which would otherwise override the hidden attribute. */
+#trail-panel [hidden] { display: none; }

@@ -3,6 +3,7 @@
  * can't be selected or edited. nudge() is called when someone tries anyway:
  * the button shakes and a message appears at the bottom of the screen.
  */
+import { showToast } from './toast.js';
 
 const ICON_LOCKED = `
   <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
@@ -17,7 +18,7 @@ const ICON_UNLOCKED = `
 
 export class TrailLock {
   /**
-   * Creates the button and toast message. Created once in main.js.
+   * Creates the button. Created once in main.js.
    * @param {{ onChange: (locked: boolean) => void }} opts
    */
   constructor({ onChange }) {
@@ -28,11 +29,6 @@ export class TrailLock {
     this.button.id = 'trail-lock';
     this.button.addEventListener('click', () => { this.toggle(); this.button.blur(); });
     document.body.appendChild(this.button);
-
-    this.toast = document.createElement('div');
-    this.toast.id = 'toast';
-    document.body.appendChild(this.toast);
-    this.toastTimer = 0;
 
     this.#render();
   }
@@ -45,7 +41,7 @@ export class TrailLock {
     this.locked = locked;
     this.#render();
     this.onChange?.(locked);
-    this.show(locked ? 'Trail selection locked' : 'Trail selection unlocked', 1200);
+    showToast(locked ? 'Trail selection locked' : 'Trail selection unlocked', 1200);
   }
 
   /**
@@ -53,18 +49,10 @@ export class TrailLock {
    * Passed to TrailEditor as onLocked (main.js).
    */
   nudge() {
-    this.show('Trail selection is locked · press L or the lock to unlock');
+    showToast('Trail selection is locked · press L or the lock to unlock');
     this.button.classList.remove('shake');
     void this.button.offsetWidth; // restart the animation
     this.button.classList.add('shake');
-  }
-
-  /** Brief message at the bottom of the screen. Used by set and nudge. */
-  show(text, ms = 2200) {
-    this.toast.textContent = text;
-    this.toast.classList.add('visible');
-    clearTimeout(this.toastTimer);
-    this.toastTimer = setTimeout(() => this.toast.classList.remove('visible'), ms);
   }
 
   /** Update the icon, tooltip and pressed state. Used by the constructor and set. */

@@ -6,6 +6,7 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 const LIFT = 1.5; // draw overlays slightly above the ground, meters
 
 const COLORS = {
+  lift: 0xff8a00,
   selected: 0xffd34d,
   edge: 0xffffff,
   node: 0xffffff,
@@ -51,6 +52,7 @@ export class TrailView {
     this.trailObjects = new Map(); // trailId -> { line, edges, color }
     this.selectedTrail = null;
     this.hoverTrails = new Set();
+    this.shownNodes = new Set(); // node ids with a dot drawn, see isNodeShown
     this.hoverKey = '';
 
     const dot = dotTexture();
@@ -167,17 +169,48 @@ export class TrailView {
     edges.renderOrder = 1;
 
     this.group.add(line, edges);
-    return { line, edges, color: this.ratingColor(id) };
+    return { line, edges, color: this.#lineColor(id) };
   }
 
-  /** Rebuild every node dot, with junctions in orange. Used by update. */
+  /** Normal color of a line: orange for a lift, otherwise the trail's difficulty. */
+  #lineColor(id) {
+    return this.network.isLift(id) ? COLORS.lift : this.ratingColor(id);
+  }
+
+  /**
+   * Is this point's dot drawn (and so grabbable)? Every trail's ends and
+   * junctions always are; other points only on the selected or hovered trail,
+   * so a whole mountain of trails doesn't drown in dots. Used by the editor's picking.
+   */
+  isNodeShown(nodeId) {
+    return this.shownNodes.has(nodeId);
+  }
+
+  /**
+   * Rebuild the node dots: ends, junctions (in orange), and every point of the
+   * selected and hovered trails. Used by update and setState.
+   */
   #rebuildNodes() {
+    const uses = new Map(); // node -> number of trails through it
+    const shown = new Set();
+    for (const t of this.network.trails.values()) {
+      for (const node of new Set(t.points.map((p) => p.node))) uses.set(node, (uses.get(node) ?? 0) + 1);
+      if (t.points.length) shown.add(t.points[0].node).add(t.points[t.points.length - 1].node);
+    }
+    for (const [node, count] of uses) if (count > 1) shown.add(node);
+    for (const id of [this.selectedTrail, ...this.hoverTrails]) {
+      for (const p of this.network.trail(id)?.points ?? []) shown.add(p.node);
+    }
+    this.shownNodes = shown;
+
     const pos = [];
     const col = [];
     const c = new THREE.Color();
-    for (const n of this.network.nodes.values()) {
+    for (const id of shown) {
+      const n = this.network.node(id);
+      if (!n) continue;
       pos.push(n.x, n.y, this.#ground(n.x, n.y));
-      c.set(this.network.isJunction(n.id) ? COLORS.junction : COLORS.node);
+      c.set(uses.get(id) > 1 ? COLORS.junction : COLORS.node);
       col.push(c.r, c.g, c.b);
     }
     const g = this.nodes.geometry;
@@ -188,20 +221,22 @@ export class TrailView {
 
   /** Re-read every trail's difficulty color. Called from main.js when thresholds change. */
   recolor() {
-    for (const [id, obj] of this.trailObjects) obj.color = this.ratingColor(id);
+    for (const [id, obj] of this.trailObjects) obj.color = this.#lineColor(id);
     this.#applySelectionColor();
   }
 
   /**
-   * Set each line's color and width: difficulty color normally; yellow when selected
-   * or hovered, with selected drawn thickest. Used by update, recolor and setState.
+   * Set each line's color and width: its normal color, or yellow when selected or
+   * hovered, with selected drawn thickest and lifts thicker than trails.
+   * Used by update, recolor and setState.
    */
   #applySelectionColor() {
     for (const [id, obj] of this.trailObjects) {
       const selected = id === this.selectedTrail;
       const hovered = this.hoverTrails.has(id);
+      const extra = this.network.isLift(id) ? 2 : 0;
       obj.line.material.color.set(selected || hovered ? COLORS.selected : obj.color);
-      obj.line.material.linewidth = selected ? 4 : hovered ? 3.5 : 3;
+      obj.line.material.linewidth = (selected ? 4 : hovered ? 3.5 : 3) + extra;
     }
   }
 
@@ -221,6 +256,7 @@ export class TrailView {
       this.hoverTrails = new Set(hoverTrails);
       this.hoverKey = hoverKey;
       this.#applySelectionColor();
+      this.#rebuildNodes();
     }
     this.#setPoints(this.highlight, highlightNode ? [highlightNode] : []);
     this.#setPoints(this.handles, handles ?? []);
