@@ -481,8 +481,11 @@ async function generateMountain(settings) {
   if (!result) showToast('Mountain generation failed.', 4000);
   else if (result.stopped) showToast('Mountain generation stopped.', 4000);
   else {
+    // Say so when the terrain only fit fewer lifts or bases than asked for.
+    const short = (got, asked) => (got < asked ? ` (of ${asked} asked)` : '');
     showToast(
-      `${plural(result.lifts, 'lift')} and ${plural(result.runs, 'run')} from ${plural(result.bases, 'base')} · ` +
+      `${plural(result.lifts, 'lift')}${short(result.lifts, settings.lifts)} and ${plural(result.runs, 'run')} ` +
+      `from ${plural(result.bases, 'base')}${short(result.bases, settings.bases)} · ` +
       `seed ${settings.seed}${result.connected ? '' : ' · some lifts couldn’t be connected'}`, 6000);
   }
 }

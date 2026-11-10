@@ -5,15 +5,20 @@
  * planner always knows where the runs actually went.
  *
  * Runs are planned in three passes:
- *   1. required: from every lift's top, a green or blue way down, so nobody
- *      is stuck at the top of a lift. It goes to another lift when it can,
- *      which links the lifts up as it goes, so few connectors are needed.
+ *   1. required: from every lift's top, a run back down to its own bottom
+ *      (a home run), so the lift can be lapped, at a difficulty that suits
+ *      the slope between them. Only where the terrain doesn't allow that does
+ *      it go to another lift's bottom.
  *   2. connect: runs between lifts, at a difficulty that suits the slope,
- *      until you can get from every lift to every other, riding lifts up and
- *      skiing runs down. Lift placement guarantees the terrain allows it; a
- *      route that fails is retried between another pair of lifts.
+ *      until you can get from every lift to every other, riding lifts up,
+ *      skiing runs down, and skating between lift ends close together (as
+ *      across a base area or a summit). Lift placement guarantees the terrain
+ *      allows it; a route that fails is retried between another pair of lifts.
  *   3. fill: aimed at the served terrain farthest from any run, until all
  *      but CROSSCUT_SHARE of the requested runs are placed.
+ *   Connectors and fill runs can join any two lift ends: a top down to a
+ *   bottom, or bottom to bottom and top to top as long as one is at least
+ *   MIN_RUN_DROP above the other.
  *   4. crosscuts, which start and end partway along other runs, alternating:
  *      - steep shots: aimed at double black at the steepest patches, from a
  *        run or lift top above the patch to a different run or lift bottom
@@ -55,6 +60,8 @@ const SHOT_SPACING = 200;    // meters: a shot uses up the other patches this cl
 const BAIL_START = 0.4;      // a bail-out leaves a black run within this share of its length
 const BAIL_REACH = 250;      // meters a bail-out can cross to an easier run
 const BAIL_DROP = 5;         // meters a bail-out must drop
+const SKATE_RADIUS = 150;    // meters between lift ends close enough to skate between
+const MIN_RUN_DROP = 50;     // meters a bottom-to-bottom or top-to-top run must drop
 
 export class RunPlanner {
   /**
@@ -74,7 +81,13 @@ export class RunPlanner {
     this.covered = new Uint8Array(n); // within COVER_RADIUS of a run
     this.near = new Uint8Array(n);    // within NEAR_RADIUS of a run
     this.failedGaps = new Uint8Array(n);   // around fill gaps that didn't work out
-    this.links = new Set();           // "a>b": a run from lift a's top to lift b's bottom
+    // Lift ends: id 2k is lift k's bottom, 2k + 1 its top; c is the grid cell.
+    this.ends = this.lifts.flatMap((l, k) => [
+      { id: 2 * k, lift: k, c: l.bottom, ref: { lift: k, end: 'bottom' } },
+      { id: 2 * k + 1, lift: k, c: l.top, ref: { lift: k, end: 'top' } },
+    ]);
+    this.links = new Set();           // "u>v": a run from lift end u down to lift end v
+    this.skates = this.#skateLinks();  // [from, to] lift ends you can skate between (see #network)
     this.nextRequired = 0;
     this.connectTried = new Set();    // "a>b" connector runs already tried
     this.accepted = 0;
@@ -144,7 +157,12 @@ export class RunPlanner {
     if (run.pass === 'bail' && rating > 1) return null;
     this.accepted++;
     const widths = this.#widthsAlong(run, ctrl);
-    if (run.from.lift != null && run.to.lift != null) this.links.add(`${run.from.lift}>${run.to.lift}`);
+    if (run.from.lift != null && run.to.lift != null) {
+      // Recorded from the higher end down, whichever way it was planned.
+      const id = (e) => 2 * e.lift + (e.end === 'top' ? 1 : 0);
+      const [u, v] = [id(run.from), id(run.to)].sort((x, y) => this.grid.z[this.ends[y].c] - this.grid.z[this.ends[x].c]);
+      this.links.add(`${u}>${v}`);
+    }
     this.kept.push({
       rating, ctrl, widths,
       samples: samples.map((p) => {
@@ -160,101 +178,156 @@ export class RunPlanner {
   }
 
   /**
-   * A green or blue run from lift k's top, to the nearest lift bottom it can
-   * reach outside the group of lifts k already connects with; failing that,
-   * its own bottom or the nearest it can reach.
+   * A run from lift k's top back to its own bottom. If the terrain doesn't
+   * allow that, to the nearest lift bottom it can reach outside the group of
+   * lifts k already connects with, or failing that the nearest it can reach
+   * at all. Its difficulty suits the ground halfway between its ends.
    */
   #required(k) {
     const top = this.lifts[k].top;
     const reach = this.plan.reachFrom(top).cells;
     const canReach = (j) => reach[this.lifts[j].bottom] === 1;
-    const group = this.#groups();
-    let to = this.#nearestLift((j) => group[j] !== group[k] && canReach(j), top, 'bottom');
-    if (to < 0) to = canReach(k) ? k : this.#nearestLift(canReach, top, 'bottom');
+    let to = canReach(k) ? k : -1;
+    if (to < 0) {
+      const { group } = this.#network();
+      to = this.#nearestLift((j) => group[j] !== group[k] && canReach(j), top, 'bottom');
+    }
+    if (to < 0) to = this.#nearestLift(canReach, top, 'bottom');
     if (to < 0) return null;
-    return this.#run(k, to, this.random.next() < 0.5 ? 0 : 1, 'required');
+    const p = this.plan.xy(top), q = this.plan.xy(this.lifts[to].bottom);
+    const middle = this.#cellAt({ x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 });
+    return this.#run(k, to, this.#targetFor(middle), 'required');
   }
 
   /** Can you get from every lift to every other? Asked by the worker once planning ends. */
   connected() {
-    return new Set(this.#groups()).size <= 1;
+    return new Set(this.#network().group).size <= 1;
   }
 
   /**
    * A run that brings the lifts closer to all connecting, or null once they
    * all are (or nothing left to try would help). Groups of lifts you can
    * already get around between are found first; a run is planned out of a
-   * group with no way out, or into a group with no way in, between the
-   * closest pair of lifts the terrain allows.
+   * group with no way out, or into a group with no way in, preferring one
+   * that does both at once, between the closest such pair of lift ends (any
+   * end to any end, dropping at least MIN_RUN_DROP) the terrain allows.
    */
   #connector() {
-    const group = this.#groups();
+    const { group, reach } = this.#network();
     if (new Set(group).size <= 1) return null;
+    const n = this.lifts.length;
     const hasExit = new Set(), hasEntry = new Set();
-    for (const link of this.links) {
-      const [a, b] = link.split('>').map(Number);
-      if (group[a] !== group[b]) { hasExit.add(group[a]); hasEntry.add(group[b]); }
+    for (let a = 0; a < n; a++) {
+      for (let b = 0; b < n; b++) {
+        if (group[a] !== group[b] && reach[a][b]) { hasExit.add(group[a]); hasEntry.add(group[b]); }
+      }
     }
     let best = null;
-    for (let a = 0; a < this.lifts.length; a++) {
-      for (let b = 0; b < this.lifts.length; b++) {
-        if (group[a] === group[b] || this.connectTried.has(`${a}>${b}`)) continue;
-        if (hasExit.has(group[a]) && hasEntry.has(group[b])) continue; // wouldn't fix a dead end
-        if (!this.plan.reachFrom(this.lifts[a].top).cells[this.lifts[b].bottom]) continue;
-        const p = this.plan.xy(this.lifts[a].top), q = this.plan.xy(this.lifts[b].bottom);
+    for (const u of this.ends) {
+      for (const v of this.ends) {
+        const a = u.lift, b = v.lift;
+        if (group[a] === group[b] || reach[a][b] || this.connectTried.has(`${u.id}>${v.id}`)) continue;
+        if (!this.#dropsEnough(u, v)) continue;
+        const fixesExit = !hasExit.has(group[a]), fixesEntry = !hasEntry.has(group[b]);
+        if (!fixesExit && !fixesEntry) continue; // wouldn't fix a dead end
+        if (!this.plan.reachFrom(u.c).cells[v.c]) continue;
+        const p = this.plan.xy(u.c), q = this.plan.xy(v.c);
         const d = Math.hypot(p.x - q.x, p.y - q.y);
-        if (!best || d < best.d) best = { a, b, d };
+        const both = fixesExit && fixesEntry;
+        if (!best || (both && !best.both) || (both === best.both && d < best.d)) best = { u, v, d, both };
       }
     }
     if (!best) return null;
-    this.connectTried.add(`${best.a}>${best.b}`);
+    this.connectTried.add(`${best.u.id}>${best.v.id}`);
     // Aim for what the ground halfway between suits.
-    const p = this.plan.xy(this.lifts[best.a].top), q = this.plan.xy(this.lifts[best.b].bottom);
+    const p = this.plan.xy(best.u.c), q = this.plan.xy(best.v.c);
     const middle = this.#cellAt({ x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 });
-    return this.#run(best.a, best.b, this.#targetFor(middle), 'connect');
+    return this.#runBetween(best.u.ref, best.v.ref, this.#targetFor(middle), 'connect');
   }
 
   /**
-   * For each lift, a group id shared by every lift it can get to and back
-   * from (ride a lift up, ski a run down to another lift's bottom, repeat).
+   * How you can get around between the lifts so far. Lift ends are the
+   * nodes (2k is lift k's bottom, 2k + 1 its top), joined by riding a lift
+   * up, the runs kept between lift ends, and skating between nearby ends.
+   * Returns { group, reach }: reach[a][b] is 1 if you can get from lift a's
+   * bottom to lift b's bottom; lifts you can get between both ways share a
+   * group id.
    */
-  #groups() {
+  #network() {
     const n = this.lifts.length;
-    const next = Array.from({ length: n }, () => []);
+    const next = Array.from({ length: 2 * n }, () => []);
+    for (let k = 0; k < n; k++) next[2 * k].push(2 * k + 1);
+    for (const [u, v] of this.skates) next[u].push(v);
     for (const link of this.links) {
-      const [a, b] = link.split('>').map(Number);
-      next[a].push(b);
+      const [u, v] = link.split('>').map(Number);
+      next[u].push(v);
     }
-    // reach[a][b]: lift b can be reached from lift a.
     const reach = Array.from({ length: n }, (_, a) => {
-      const seen = new Uint8Array(n);
-      const stack = [a];
-      seen[a] = 1;
+      const seen = new Uint8Array(2 * n);
+      const stack = [2 * a];
+      seen[2 * a] = 1;
       while (stack.length) {
-        for (const b of next[stack.pop()]) if (!seen[b]) { seen[b] = 1; stack.push(b); }
+        for (const v of next[stack.pop()]) if (!seen[v]) { seen[v] = 1; stack.push(v); }
       }
-      return seen;
+      return Uint8Array.from({ length: n }, (_, b) => seen[2 * b]);
     });
-    return Array.from({ length: n }, (_, a) => {
+    const group = Array.from({ length: n }, (_, a) => {
       for (let b = 0; b < n; b++) if (reach[a][b] && reach[b][a]) return b;
       return a;
     });
+    return { group, reach };
   }
 
   /**
-   * A run meant to pass near gap cell `gap`: from a top that can reach it to
-   * the nearest bottom it drains to, at a difficulty that suits its slope.
+   * Pairs of lift ends (as #network numbers them) within SKATE_RADIUS where
+   * the terrain lets you get from the first to the second: across a base
+   * area between lift bottoms, or along a summit between tops.
+   */
+  #skateLinks() {
+    const ends = this.ends.map((e) => [e.id, e.c]);
+    const out = [];
+    for (const [u, cu] of ends) {
+      for (const [v, cv] of ends) {
+        if (u >> 1 === v >> 1) continue; // the same lift
+        const p = this.plan.xy(cu), q = this.plan.xy(cv);
+        if (Math.hypot(p.x - q.x, p.y - q.y) > SKATE_RADIUS) continue;
+        if (this.plan.reachFrom(cu).cells[cv]) out.push([u, v]);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Is lift end `v` far enough below `u` for a run between them? A top down
+   * to a bottom only has to go downhill; bottom to bottom and top to top need
+   * MIN_RUN_DROP, so they're real runs rather than a shuffle across. Used by
+   * #connector and #fill.
+   */
+  #dropsEnough(u, v) {
+    const drop = this.grid.z[u.c] - this.grid.z[v.c];
+    const topToBottom = u.id % 2 === 1 && v.id % 2 === 0;
+    return drop > 0 && (topToBottom || drop >= MIN_RUN_DROP);
+  }
+
+  /**
+   * A run meant to pass near gap cell `gap`: from a random lift end (top or
+   * bottom) that can reach it, to the nearest lift end it drains to at least
+   * MIN_RUN_DROP lower, at a difficulty that suits the gap's slope.
    */
   #fill(gap) {
-    const tops = [], bottoms = [];
-    for (let j = 0; j < this.lifts.length; j++) {
-      if (this.plan.reachFrom(this.lifts[j].top).cells[gap]) tops.push(j);
-      if (this.plan.drainsTo(this.lifts[j].bottom).cells[gap]) bottoms.push(j);
+    const starts = this.ends.filter((e) => this.plan.reachFrom(e.c).cells[gap]);
+    if (!starts.length) return null;
+    const from = starts[Math.floor(this.random.next() * starts.length)];
+    const g = this.plan.xy(gap);
+    let to = null, toD = Infinity;
+    for (const e of this.ends) {
+      if (e === from || !this.#dropsEnough(from, e) || !this.plan.drainsTo(e.c).cells[gap]) continue;
+      const p = this.plan.xy(e.c);
+      const d = Math.hypot(p.x - g.x, p.y - g.y);
+      if (d < toD) { toD = d; to = e; }
     }
-    if (!tops.length || !bottoms.length) return null;
-    const from = tops[Math.floor(this.random.next() * tops.length)];
-    const to = this.#nearestLift((j) => bottoms.includes(j), gap, 'bottom');
-    return { ...this.#run(from, to, this.#targetFor(gap), 'fill'), gap };
+    if (!to) return null;
+    return { ...this.#runBetween(from.ref, to.ref, this.#targetFor(gap), 'fill'), gap };
   }
 
   /** Assemble a planned run from lift `from`'s top to lift `to`'s bottom. */

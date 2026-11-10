@@ -1,7 +1,7 @@
 import { randomSeed } from './random.js';
 
 const LIMITS = { bases: [1, 3], lifts: [1, 12], runs: [3, 40] };
-const DEFAULTS = { bases: 2, lifts: 6, runs: 16 };
+const DEFAULTS = { bases: 2, lifts: 6, runs: 25 };
 const SAVE_KEY = 'ascutney-mountain-settings';
 const MAX_SEED = 999999;
 

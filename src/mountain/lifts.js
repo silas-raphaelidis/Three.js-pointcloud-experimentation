@@ -2,14 +2,19 @@
  * Lift placement for mountain generation. Plain data and math, run in the
  * mountain worker.
  *
- * Lifts are added one at a time. Each new lift is the one that opens up the
- * most new terrain: ground you can ski to from some lift's top that also
- * drains back to some lift's bottom ("served" terrain). The first lift starts
+ * Lifts are added one at a time. Each new lift is chosen for the new terrain
+ * it opens up (ground you can ski to from some lift's top that also drains
+ * back to some lift's bottom: "served" terrain) times the vertical it climbs,
+ * so long lifts beat short hops. Tops must be destinations (a summit, ridge
+ * or local high point) and every lift climbs a good share of the mountain,
+ * so no lift ends partway up a slope. Fewer lifts than asked for are placed
+ * rather than ones that would barely add anything. The first lift starts
  * at a base. Every lift after it must connect both ways: you can ski to its
  * bottom from an existing lift, and from its top to an existing lift's bottom,
  * so every lift can always reach every other. Lifts starting at a base are
  * preferred, so several fan out from a base to different peaks as at real
- * resorts (lifts from different bases may share a peak).
+ * resorts. Lifts from the same base, or starting close together, never end
+ * at the same peak; lifts from different parts of the mountain may.
  * Randomness picks among the good options rather than always the best, so
  * every seed gives a different but sensible layout.
  */
@@ -24,17 +29,22 @@ const RANDOM_BOTTOMS = 25;    // plus this many other bottoms, chosen at random
 const BASE_BOTTOMS = 15;      // plus this many spots in the bases
 const BASE_RADIUS = 150;      // meters around a base's first lift that count as the base
 const BASE_PREFERENCE = 1.5;  // a lift from a base counts as opening this much more terrain
-const MIN_RISE = 80;          // meters a lift must climb
+const MIN_RISE = 80;          // meters a lift must climb, at the least
+const MIN_RISE_SHARE = 0.3;   // ...and at least this share of the mountain's relief
+const PEAK_RADIUS = 250;      // meters: a top must be near the highest ground this close to it
+const PEAK_DROP = 25;         // ...no more than this many meters below it
 const MIN_LENGTH = 250;       // horizontal meters
 const MAX_LENGTH = 2000;
 const MIN_LINE_PITCH = 0.18;  // gentlest average climb (rise/run): lifts go up, not along ridges
 const MAX_LINE_PITCH = 0.7;   // steepest average climb of a lift line
 const TOWER_CLEARANCE = 15;   // how far ground may rise above the straight line (towers)
 const MIN_TERMINAL_GAP = 40;  // meters between terminals of different lifts
-const MIN_TOP_GAP = 250;      // meters between tops of lifts from the same base, so they reach different peaks
+// Lifts from the same base, or whose bottoms are close, must reach different peaks.
+const SAME_PEAK = 350;        // meters: tops closer than this count as the same peak
+const CLOSE_BOTTOMS = 400;    // meters: bottoms closer than this count as starting together
 const MIN_BASE_SPACING = 800; // meters between bases
 const BASE_CHOICES = 5;       // a base is chosen among this many of the best
-const MIN_GAIN = 30000;       // m² of new terrain a lift must open up (3 ha)
+const MIN_GAIN = 80000;       // m² of new terrain a lift must open up (8 ha)
 const CHOICE_SPREAD = 0.7;    // choose among options at least this good relative to the best
 
 /**
@@ -111,6 +121,7 @@ export class LiftPlan {
     this.baseCells = new Map();        // terminal spot in a base -> that base's index
     this.reachCache = new Map();       // top cell -> { cells, box }
     this.catchCache = new Map();       // bottom cell -> { cells, box }
+    this.minRise = Math.max(MIN_RISE, MIN_RISE_SHARE * this.#relief());
     this.stations = this.#stationCells();
     this.tops = this.#candidateTops();
   }
@@ -138,7 +149,10 @@ export class LiftPlan {
     const bottom = this.#nearestCell(base.cells, base.x, base.y);
     const options = this.tops
       .filter((top) => this.#valid(bottom, top, index) && this.#connects(bottom, top))
-      .map((top) => ({ bottom, top, base: index, ...this.#gain(bottom, top) }));
+      .map((top) => {
+        const option = { bottom, top, base: index, ...this.#gain(bottom, top) };
+        return { ...option, score: option.gain * this.#rise(bottom, top) };
+      });
     if (!this.#choose(options)) return false;
     // Anywhere gentle near the first lift is part of the base, for later lifts to start from.
     const at = this.xy(bottom);
@@ -150,7 +164,7 @@ export class LiftPlan {
   }
 
   /**
-   * Add the lift that opens up the most new terrain (roughly), preferring
+   * Add the lift that best combines new terrain and vertical, preferring
    * lifts from a base. Returns false if none is worth adding.
    */
   addLift() {
@@ -161,15 +175,15 @@ export class LiftPlan {
       for (const top of this.tops) {
         if (!this.#valid(bottom, top, base) || !this.#connects(bottom, top)) continue;
         const option = { bottom, top, base, ...this.#gain(bottom, top) };
-        options.push({ ...option, score: option.gain * preference });
+        options.push({ ...option, score: option.gain * this.#rise(bottom, top) * preference });
       }
     }
     return this.#choose(options);
   }
 
   /**
-   * Pick one of the best options worth building at random, weighted by score
-   * (gain, unless a preference applies), and add it. Used by both add methods.
+   * Pick one of the best options worth building (at least MIN_GAIN of new
+   * terrain) at random, weighted by score, and add it. Used by both add methods.
    */
   #choose(options) {
     const worthwhile = options.filter((o) => o.gain >= MIN_GAIN);
@@ -232,7 +246,7 @@ export class LiftPlan {
   #valid(bottom, top, base) {
     const { z } = this.grid;
     const rise = z[top] - z[bottom];
-    if (rise < MIN_RISE) return false;
+    if (rise < this.minRise) return false;
     const b = this.xy(bottom), t = this.xy(top);
     const length = Math.hypot(t.x - b.x, t.y - b.y);
     if (length < MIN_LENGTH || length > MAX_LENGTH) return false;
@@ -243,7 +257,8 @@ export class LiftPlan {
       for (const p of [lb, lt]) {
         for (const q of [b, t]) if (Math.hypot(p.x - q.x, p.y - q.y) < MIN_TERMINAL_GAP) return false;
       }
-      if (base >= 0 && lift.base === base && Math.hypot(lt.x - t.x, lt.y - t.y) < MIN_TOP_GAP) return false;
+      const together = (base >= 0 && lift.base === base) || Math.hypot(lb.x - b.x, lb.y - b.y) < CLOSE_BOTTOMS;
+      if (together && Math.hypot(lt.x - t.x, lt.y - t.y) < SAME_PEAK) return false;
       if (segmentsCross(b, t, lb, lt)) return false;
     }
 
@@ -292,9 +307,46 @@ export class LiftPlan {
     return out;
   }
 
-  /** The highest stations, plus a random sample of the rest. Chosen once per generation. */
+  /** Meters a lift from `bottom` to `top` climbs. Used in scoring. */
+  #rise(bottom, top) {
+    return this.grid.z[top] - this.grid.z[bottom];
+  }
+
+  /** Height range of the ground away from the map's edge, meters. Used for the climb floor. */
+  #relief() {
+    const { cols, z } = this.grid;
+    let lo = Infinity, hi = -Infinity;
+    for (let c = 0; c < z.length; c++) {
+      if (!isInside(this.grid, c % cols, Math.floor(c / cols))) continue;
+      if (z[c] < lo) lo = z[c];
+      if (z[c] > hi) hi = z[c];
+    }
+    return hi - lo;
+  }
+
+  /**
+   * Is cell `c` a destination worth a lift: within PEAK_DROP of the highest
+   * ground within PEAK_RADIUS (a summit, a ridge, or a local high point)?
+   * Used to choose candidate tops.
+   */
+  #isHighPoint(c) {
+    const { cols, rows, cell, z } = this.grid;
+    const ci = c % cols, cj = (c - ci) / cols;
+    const r = Math.ceil(PEAK_RADIUS / cell);
+    for (let j = Math.max(0, cj - r); j <= Math.min(rows - 1, cj + r); j++) {
+      for (let i = Math.max(0, ci - r); i <= Math.min(cols - 1, ci + r); i++) {
+        if ((i - ci) ** 2 + (j - cj) ** 2 <= r * r && z[j * cols + i] > z[c] + PEAK_DROP) return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * The highest high-point stations, plus a random sample of the other
+   * high-point stations. Chosen once per generation.
+   */
   #candidateTops() {
-    const byHeight = [...this.stations].sort((a, b) => this.grid.z[b] - this.grid.z[a]);
+    const byHeight = this.stations.filter((c) => this.#isHighPoint(c)).sort((a, b) => this.grid.z[b] - this.grid.z[a]);
     const rest = this.random.shuffle(byHeight.slice(HIGH_TOPS));
     return [...byHeight.slice(0, HIGH_TOPS), ...rest.slice(0, RANDOM_TOPS)];
   }
