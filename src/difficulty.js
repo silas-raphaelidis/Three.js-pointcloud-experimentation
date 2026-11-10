@@ -6,7 +6,8 @@ import * as THREE from 'three';
  * the legend. Thresholds are editable in the legend and saved locally.
  *
  * Slopes are rise/run (0.25 = 25 %). Rough North American guide:
- *   green < 25 %  ·  blue 25–40 %  ·  black 40–55 %  ·  double black > 55 %
+ *   beginner (green) < 25 %  ·  intermediate (blue) 25–40 %
+ *   advanced (black) 40–55 %  ·  expert (double black) > 55 %
  */
 
 const DEFAULTS = [0.25, 0.4, 0.55];
@@ -16,12 +17,20 @@ const OLD_DEFAULTS = [[0.25, 0.4, 0.6], [0.25, 0.4, 0.5]];
 const SAVE_KEY = 'ascutney-difficulty-v1';
 
 export const RATINGS = [
+  // Plain names, so someone who doesn't ski can follow; the colors keep the
+  // usual trail-sign meaning (green, blue, black, double black).
   // `color` is what the map and legend show; `text` is readable on the dark HUD.
-  { name: 'green', color: '#3ec46d', text: '#3ec46d' },
-  { name: 'blue', color: '#4c8dff', text: '#4c8dff' },
-  { name: 'black', color: '#e04848', text: '#ff7a7a' },      // shown as red
-  { name: 'double black', color: '#26262b', text: '#c9d0d8' }, // charcoal
+  { name: 'beginner', color: '#3ec46d', text: '#3ec46d' },     // green
+  { name: 'intermediate', color: '#4c8dff', text: '#4c8dff' }, // blue
+  { name: 'advanced', color: '#e04848', text: '#ff7a7a' },     // black, shown as red
+  { name: 'expert', color: '#26262b', text: '#c9d0d8' },       // double black, charcoal
 ];
+
+/** A rating's name with a capital first letter, for labels and menus. */
+export function ratingLabel(index) {
+  const name = RATINGS[index].name;
+  return name[0].toUpperCase() + name.slice(1);
+}
 
 const listeners = new Set();
 let thresholds = load();
@@ -221,10 +230,10 @@ export class DifficultyLegend {
     this.el.innerHTML = `
       <div class="title">Slope difficulty</div>
       <div class="rows">
-        <div class="row"><span class="sw" style="background:${RATINGS[0].color}"></span><span class="name">Green</span><span class="range">below ${input(0)}</span></div>
-        <div class="row"><span class="sw" style="background:${RATINGS[1].color}"></span><span class="name">Blue</span><span class="range">to ${input(1)}</span></div>
-        <div class="row"><span class="sw" style="background:${RATINGS[2].color}"></span><span class="name">Black</span><span class="range">to ${input(2)}</span></div>
-        <div class="row"><span class="sw dbl" style="background:${RATINGS[3].color}"></span><span class="name">Double black</span><span class="range">above</span></div>
+        <div class="row"><span class="sw" style="background:${RATINGS[0].color}"></span><span class="name">${ratingLabel(0)}</span><span class="range">below ${input(0)}</span></div>
+        <div class="row"><span class="sw" style="background:${RATINGS[1].color}"></span><span class="name">${ratingLabel(1)}</span><span class="range">to ${input(1)}</span></div>
+        <div class="row"><span class="sw" style="background:${RATINGS[2].color}"></span><span class="name">${ratingLabel(2)}</span><span class="range">to ${input(2)}</span></div>
+        <div class="row"><span class="sw dbl" style="background:${RATINGS[3].color}"></span><span class="name">${ratingLabel(3)}</span><span class="range">above</span></div>
       </div>
       <div class="degrees"></div>
       <div class="smoothing">

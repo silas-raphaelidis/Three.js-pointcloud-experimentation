@@ -5,7 +5,7 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
 const LIFT = 1.5; // draw overlays slightly above the ground, meters
 
-const COLORS = {
+export const COLORS = {
   lift: 0xff8a00,
   selected: 0xffd34d,
   edge: 0xffffff,

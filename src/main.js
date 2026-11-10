@@ -8,12 +8,13 @@ import { TrailMask, trailGLSL } from './trails/mask.js';
 import { TrailNetwork } from './trails/network.js';
 import { TrailGeometry } from './trails/spline.js';
 import { TrailRasterizer } from './trails/rasterize.js';
-import { TrailView } from './trails/view.js';
+import { TrailView, COLORS as TRAIL_COLORS } from './trails/view.js';
 import { TrailEditor } from './trails/editor.js';
 import { TrailGenerator } from './trails/generator.js';
 import { MountainGenerator } from './mountain/generator.js';
 import { MountainDialog } from './mountain/dialog.js';
 import { showToast } from './toast.js';
+import { HelpPanel } from './help.js';
 import { difficulty, trailStats } from './trails/stats.js';
 import { TrailPanel } from './trails/panel.js';
 import { GroundMesh } from './ground.js';
@@ -29,6 +30,8 @@ import {
   getSmoothing,
   onSmoothingChange,
   DifficultyLegend,
+  RATINGS,
+  ratingLabel,
 } from './difficulty.js';
 
 // Which file to load: ?file=ascutney-1.4m.copc.laz to compare thinning levels.
@@ -330,7 +333,22 @@ function updateHud(extra) {
     <strong>${decodeURIComponent(FILE.split('/').pop())}</strong><br>
     ${(loadedPoints / 1e6).toFixed(1)}M / ${(totalPoints / 1e6).toFixed(1)}M points ${loadStatus}<br>
     ${cursorInfo ? `<span class="cursor">${cursorInfo}</span><br>` : ''}
-    <span class="keys">Drag to orbit · Shift-drag to pan · wheel to zoom · right-click for trail options</span>`;
+    <span class="keys">Drag to orbit · Shift-drag to pan · wheel to zoom · right-click for trail options</span>
+    ${colorKeyHtml()}`;
+}
+
+/**
+ * A small key to the trail line colors, under the info box. Shown while the
+ * View menu's Legend option is on and trails are showing, except in the slope
+ * difficulty view, whose own legend explains the colors. Used by updateHud.
+ */
+function colorKeyHtml() {
+  if (!colorKeyOn || !trailsShown || uniforms.uColorMode.value === COLOR.difficulty) return '';
+  const hex = (n) => `#${n.toString(16).padStart(6, '0')}`;
+  const item = (color, label, dark = false) =>
+    `<span><i style="background:${color}"${dark ? ' class="dark"' : ''}></i>${label}</span>`;
+  return `<div class="key">${RATINGS.map((r, i) => item(r.color, ratingLabel(i), i === 3)).join('')}` +
+    `${item(hex(TRAIL_COLORS.lift), 'Lift')}</div>`;
 }
 
 // ---------- Terrain + cursor ----------
@@ -384,15 +402,19 @@ function updateCursor() {
   cursor.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
   cursor.visible = true;
 
-  // Same smoothed slope and thresholds as the difficulty view, so the
-  // readout always matches the color under the cursor.
-  const slope = terrain.smoothSlopeAt(hit.x, hit.y);
-  const rating = difficulty(slope);
-  const elev = hit.z + sceneOffsetZ;
-  cursorInfo =
-    `${elev.toFixed(0)} m (${(elev * 3.28084).toFixed(0)} ft) · ` +
-    `slope ${(slope * 100).toFixed(0)}% (${THREE.MathUtils.radToDeg(Math.atan(slope)).toFixed(0)}°) · ` +
-    `<span style="color:${rating.color}">${rating.name}</span>`;
+  // The readout (elevation, slope and its difficulty) only shows in the
+  // difficulty view, using the same smoothed slope and thresholds, so it
+  // always matches the color under the cursor.
+  cursorInfo = '';
+  if (colorMode() === COLOR.difficulty) {
+    const elev = hit.z + sceneOffsetZ;
+    const slope = terrain.smoothSlopeAt(hit.x, hit.y);
+    const rating = difficulty(slope);
+    cursorInfo =
+      `${elev.toFixed(0)} m (${(elev * 3.28084).toFixed(0)} ft) · ` +
+      `slope ${(slope * 100).toFixed(0)}% (${THREE.MathUtils.radToDeg(Math.atan(slope)).toFixed(0)}°) · ` +
+      `<span style="color:${rating.color}">${rating.name}</span>`;
+  }
   updateHud();
 }
 
@@ -812,45 +834,8 @@ function frameSelected() {
 }
 
 // ---------- Help panel ----------
-const help = document.createElement('div');
-help.id = 'help';
-help.hidden = true;
-help.innerHTML = `
-  <h3>Controls</h3>
-  <table>
-    <tr><th colspan="2">Camera</th></tr>
-    <tr><td>Left- or middle-drag</td><td>Orbit</td></tr>
-    <tr><td>Shift + drag</td><td>Pan</td></tr>
-    <tr><td>Ctrl + middle-drag</td><td>Zoom</td></tr>
-    <tr><td>Wheel</td><td>Zoom toward cursor</td></tr>
-    <tr><td>Alt + left-drag / Shift + Alt</td><td>Orbit / pan (trackpads)</td></tr>
-    <tr><td>F</td><td>Frame selected trail or point</td></tr>
-    <tr><td>Home</td><td>Frame the whole mountain</td></tr>
-    <tr><th colspan="2">Trails</th></tr>
-    <tr><td>Right-click terrain</td><td>Start a new trail or lift</td></tr>
-    <tr><td>Click terrain (drawing)</td><td>Add a point</td></tr>
-    <tr><td>Double-click / Enter</td><td>Finish the trail</td></tr>
-    <tr><td>Second click (lift)</td><td>Place the other end</td></tr>
-    <tr><td>Right-click, pick a difficulty</td><td>Generate a trail, then click where it ends</td></tr>
-    <tr><td>Generate mountain (top bar)</td><td>Replace everything with generated lifts and runs (Esc cancels)</td></tr>
-    <tr><td>Clear mountain (top bar)</td><td>Remove every trail and lift (Ctrl+Z undoes it)</td></tr>
-    <tr><td>Right-click</td><td>Options for a point, trail or spot</td></tr>
-    <tr><td>Hover / click / double-click a trail</td><td>Show its points / select it / add a point</td></tr>
-    <tr><td>Drag a point / handle</td><td>Move it / change width</td></tr>
-    <tr><td>Shift-click a trail or point</td><td>Branch from there</td></tr>
-    <tr><td>&minus; / =</td><td>Narrower / wider</td></tr>
-    <tr><td>Delete &middot; Ctrl+Z &middot; Ctrl+Shift+Z &middot; Esc</td><td>Remove point &middot; undo &middot; redo &middot; cancel</td></tr>
-    <tr><td>L</td><td>Lock / unlock trail selection</td></tr>
-    <tr><th colspan="2">View</th></tr>
-    <tr><td>V &middot; E</td><td>Vegetation &middot; shading</td></tr>
-    <tr><td>H &middot; D</td><td>Color by height above ground &middot; slope difficulty</td></tr>
-    <tr><td>T</td><td>Show / hide trail and lift lines (the cuts stay)</td></tr>
-    <tr><td>G &middot; M</td><td>Ghost hidden trails (and let them be picked) &middot; ground surface</td></tr>
-    <tr><td>[ ]</td><td>Point size</td></tr>
-    <tr><td>P</td><td>FPS counter</td></tr>
-  </table>
-  <p>Press ? to close</p>`;
-document.body.appendChild(help);
+// Every control, grouped, in a dialog (see help.js).
+const help = new HelpPanel();
 
 // ---------- FPS counter ----------
 // Frames per second, plus average and worst frame time, over half-second windows.
@@ -883,6 +868,7 @@ function tickFps() {
 // shortcuts both go through these, so they always agree.
 let edlOn = true;
 let trailsShown = true; // applied to the trail drawings and editor once they exist
+let colorKeyOn = true;  // the small key to trail colors under the info box
 let groundOn = false; // applied to the ground mesh once it exists
 let ghostTrails = false;
 
@@ -910,7 +896,13 @@ const view = {
       // Hides the lines and points only; the cuts in the forest stay.
       if (trailView) trailView.group.visible = on;
       editor?.setTrailsHidden(!on);
+      updateHud(); // the color key goes with the trails
     },
+  },
+  colorKey: {
+    label: 'Legend', default: true,
+    get: () => colorKeyOn,
+    set: (on) => { colorKeyOn = on; updateHud(); },
   },
   ghost: {
     label: 'Ghost hidden trails', shortcut: 'G', default: false,
@@ -942,6 +934,8 @@ const colorMode = () => uniforms.uColorMode.value;
 function setColorMode(mode) {
   uniforms.uColorMode.value = mode;
   legend.show(mode === COLOR.difficulty);
+  pointerDirty = true; // the cursor readout only shows in the difficulty view
+  updateHud(); // the small color key hides while the full legend is up
 }
 /** Keys H / D: switch to that mode, or back to natural if it's already on. */
 const toggleColorMode = (mode) => setColorMode(colorMode() === mode ? COLOR.natural : mode);
@@ -994,6 +988,7 @@ menuBar.addMenu('View', [
   },
   { type: 'separator' },
   { type: 'toggle', ...view.trails },
+  { type: 'toggle', ...view.colorKey },
   { type: 'toggle', ...view.ghost },
   { type: 'toggle', ...view.fps },
   { type: 'separator' },
@@ -1002,7 +997,7 @@ menuBar.addMenu('View', [
   { type: 'separator' },
   { type: 'action', label: 'Reset to defaults', action: resetView },
 ]);
-menuBar.addButton({ label: 'Controls', shortcut: '?', action: () => { help.hidden = !help.hidden; } });
+menuBar.addButton({ label: 'Controls', shortcut: '?', action: () => help.toggle() });
 // Opens the panel for generating a whole mountain; while one is being built it reads "Generating…".
 const mountainButton = menuBar.addButton({
   label: 'Generate mountain',
@@ -1057,7 +1052,7 @@ addEventListener('keydown', (e) => {
     case 'f': case 'F': frameSelected(); break;
     case 'l': case 'L': trailLock.toggle(); break;
     case 'Home': if (homeView) flyTo(homeView.position, homeView.target); break;
-    case '?': help.hidden = !help.hidden; break;
+    case '?': help.toggle(); break;
     default: return;
   }
   menuBar.refresh();

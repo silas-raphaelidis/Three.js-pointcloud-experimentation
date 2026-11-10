@@ -3,7 +3,7 @@ import { trailStats } from './stats.js';
 import { ContextMenu } from './menu.js';
 import { sampleSpline } from './spline.js';
 import { pickRunName, pickLiftName } from './names.js';
-import { RATINGS } from '../difficulty.js';
+import { RATINGS, ratingLabel } from '../difficulty.js';
 import { showToast } from '../toast.js';
 
 const PICK_PX = 11;         // screen radius for grabbing points and handles
@@ -635,7 +635,9 @@ export class TrailEditor {
     this.#giveDefaultName(t);
     this.selection = { trailId: t.id, index: null };
     if (result.rating !== target) {
-      showToast(`Couldn't make a ${RATINGS[target].name} here. This run rates ${RATINGS[result.rating].name}.`, WARNING_MS);
+      const a = (name) => (/^[aeiou]/.test(name) ? 'an' : 'a');
+      const want = RATINGS[target].name, got = RATINGS[result.rating].name;
+      showToast(`Couldn't make ${a(want)} ${want} run here. This run rates ${got}.`, WARNING_MS);
     }
     this.refresh();
   }
@@ -708,8 +710,8 @@ export class TrailEditor {
     const generateItems = (from) => (this.generation ? [] : [
       { type: 'separator' },
       { type: 'header', label: 'Generate trail from here' },
-      ...RATINGS.map((r, i) => ({
-        label: r.name[0].toUpperCase() + r.name.slice(1),
+      ...RATINGS.map((_, i) => ({
+        label: ratingLabel(i),
         action: edit(() => this.#beginGenerate(from, i)),
       })),
     ]);
