@@ -217,6 +217,23 @@ export class TrailEditor {
   }
 
   /**
+   * Remove every trail and lift as one undo step. Returns false (and changes
+   * nothing) if trails are locked or hidden, or there's nothing to clear.
+   * Used by the Clear mountain button (main.js).
+   */
+  clearAll() {
+    if (this.locked) { this.onLocked?.(); return false; }
+    if (!this.network.trails.size) return false;
+    this.#cancelDrawing();
+    this.generation = null; // a running trail generation drops its result
+    this.#snapshot(); // also ends a mountain generation in progress
+    this.#resetEditing();
+    this.network.clear();
+    this.refresh();
+    return true;
+  }
+
+  /**
    * Start replacing every trail and lift with generated ones. The old network
    * is cleared as a single undo step, so Ctrl+Z brings it back however many
    * trails the build adds. Cancels any drawing or trail generation in

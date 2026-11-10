@@ -830,6 +830,7 @@ help.innerHTML = `
     <tr><td>Second click (lift)</td><td>Place the other end</td></tr>
     <tr><td>Right-click, pick a difficulty</td><td>Generate a trail, then click where it ends</td></tr>
     <tr><td>Generate mountain (top bar)</td><td>Replace everything with generated lifts and runs (Esc cancels)</td></tr>
+    <tr><td>Clear mountain (top bar)</td><td>Remove every trail and lift (Ctrl+Z undoes it)</td></tr>
     <tr><td>Right-click</td><td>Options for a point, trail or spot</td></tr>
     <tr><td>Hover / click / double-click a trail</td><td>Show its points / select it / add a point</td></tr>
     <tr><td>Drag a point / handle</td><td>Move it / change width</td></tr>
@@ -1008,6 +1009,15 @@ const mountainButton = menuBar.addButton({
   },
 });
 const mountainDialog = new MountainDialog({ anchor: mountainButton, onGenerate: generateMountain });
+// Removes every trail and lift; one Ctrl+Z brings them back.
+menuBar.addButton({
+  label: 'Clear mountain',
+  action: () => {
+    if (!editor) return;
+    if (editor.clearAll()) showToast('Cleared all trails and lifts · Ctrl+Z to undo', 4000);
+    else if (!editor.locked) showToast('Nothing to clear');
+  },
+});
 
 // Lock button on the left edge: blocks trail selection and editing.
 const trailLock = new TrailLock({ onChange: (locked) => editor?.setLocked(locked) });
