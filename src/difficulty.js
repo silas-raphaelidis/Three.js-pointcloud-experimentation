@@ -6,10 +6,13 @@ import * as THREE from 'three';
  * the legend. Thresholds are editable in the legend and saved locally.
  *
  * Slopes are rise/run (0.25 = 25 %). Rough North American guide:
- *   green < 25 %  ·  blue 25–40 %  ·  black 40–60 %  ·  double black > 60 %
+ *   green < 25 %  ·  blue 25–40 %  ·  black 40–55 %  ·  double black > 55 %
  */
 
-const DEFAULTS = [0.25, 0.4, 0.6];
+const DEFAULTS = [0.25, 0.4, 0.55];
+// Earlier defaults (double black at 60 %, then briefly 50 %). A save that
+// still holds exactly one of these was never customized, so it gets the new defaults.
+const OLD_DEFAULTS = [[0.25, 0.4, 0.6], [0.25, 0.4, 0.5]];
 const SAVE_KEY = 'ascutney-difficulty-v1';
 
 export const RATINGS = [
@@ -27,7 +30,8 @@ let thresholds = load();
 function load() {
   try {
     const saved = JSON.parse(localStorage.getItem(SAVE_KEY));
-    if (Array.isArray(saved) && saved.length === 3 && saved.every(Number.isFinite)) return saved;
+    const valid = Array.isArray(saved) && saved.length === 3 && saved.every(Number.isFinite);
+    if (valid && !OLD_DEFAULTS.some((old) => saved.every((v, i) => v === old[i]))) return saved;
   } catch { /* no storage or bad data */ }
   return [...DEFAULTS];
 }

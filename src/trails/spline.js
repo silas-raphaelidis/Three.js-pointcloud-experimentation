@@ -8,6 +8,7 @@
 
 const ALPHA = 0.5;
 const EPS = 1e-4;
+const CHUNK = 25; // samples per redraw box when a trail changes (about 50 m)
 
 /**
  * Point on the centripetal Catmull-Rom segment p1 -> p2 at t in [0, 1].
@@ -77,6 +78,38 @@ export function sampleSpline(ctrl, step = 2) {
 }
 
 /**
+ * The samples of `a` (before) and `b` (after) that differ, as [changedA, changedB],
+ * each with one unchanged sample of context on either side. Samples are compared
+ * a control segment at a time, matching unchanged segments from both ends, so
+ * a moved, inserted or removed point only counts the segments around it.
+ * Used by TrailGeometry.update.
+ */
+function changedStretches(a, b) {
+  // Samples grouped by the control segment they belong to.
+  const bySegment = (samples) => {
+    const segs = [];
+    for (const p of samples) (segs[p.seg] ??= []).push(p);
+    return segs.filter(Boolean);
+  };
+  const same = (x, y) => x.length === y.length &&
+    x.every((p, i) => p.x === y[i].x && p.y === y[i].y && p.w === y[i].w);
+  const sa = bySegment(a), sb = bySegment(b);
+  let head = 0;
+  while (head < sa.length && head < sb.length && same(sa[head], sb[head])) head++;
+  let tail = 0;
+  while (tail < sa.length - head && tail < sb.length - head &&
+    same(sa[sa.length - 1 - tail], sb[sb.length - 1 - tail])) tail++;
+  // Back to sample indexes, widened by one sample of context.
+  const range = (samples, segs) => {
+    const before = segs.slice(0, head).reduce((n, s) => n + s.length, 0);
+    const changed = segs.slice(head, segs.length - tail).reduce((n, s) => n + s.length, 0);
+    if (!changed) return [];
+    return samples.slice(Math.max(0, before - 1), before + changed + 1);
+  };
+  return [range(a, sa), range(b, sb)];
+}
+
+/**
  * Sampled geometry for every trail, refreshed only for trails that changed.
  * Also tracks each trail's footprint so callers know what area to redraw.
  */
@@ -109,40 +142,45 @@ export class TrailGeometry {
   }
 
   /**
-   * Re-sample the given trails. Returns the world-space box covering both their
-   * old and new footprints (null if nothing to redraw).
-   * Used by processTrails in main.js; the box tells the rasterizer what to recut.
+   * Re-sample the given trails. Returns world-space boxes covering where they
+   * changed, old and new footprints both (null if nothing to redraw). Only
+   * the stretches that actually moved are covered: dragging one point reshapes
+   * just the segments next to it, so the rest of a long trail isn't recut.
+   * Used by processTrails in main.js; the boxes tell the rasterizer what to recut.
    */
   update(trailIds) {
-    let box = null;
-    // Expand the combined box to include b.
-    const grow = (b) => {
-      if (!b) return;
-      box = box
-        ? { minX: Math.min(box.minX, b.minX), minY: Math.min(box.minY, b.minY), maxX: Math.max(box.maxX, b.maxX), maxY: Math.max(box.maxY, b.maxY) }
-        : { ...b };
-    };
-
+    const boxes = [];
     for (const id of trailIds) {
-      grow(this.cache.get(id)?.box);
+      const old = this.cache.get(id)?.samples ?? [];
       const trail = this.network.trail(id);
-      if (!trail) {
-        this.cache.delete(id);
-        continue;
+      const samples = trail ? sampleSpline(this.controlPoints(trail)) : [];
+      if (trail) this.cache.set(id, { samples, box: samples.length ? this.#boxOf(samples) : null });
+      else this.cache.delete(id);
+
+      const [was, now] = changedStretches(old, samples);
+      // Pair up old and new pieces of about CHUNK samples, so each box stays
+      // small and covers both where the trail was and where it is now.
+      const pieces = Math.max(Math.ceil(was.length / CHUNK), Math.ceil(now.length / CHUNK));
+      for (let k = 0; k < pieces; k++) {
+        // One sample of overlap, so the segment between pieces is covered too.
+        const part = [...was.slice(k * CHUNK, (k + 1) * CHUNK + 1), ...now.slice(k * CHUNK, (k + 1) * CHUNK + 1)];
+        if (part.length) boxes.push(this.#boxOf(part));
       }
-      const samples = sampleSpline(this.controlPoints(trail));
-      const b = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
-      for (const p of samples) {
-        const r = p.w / 2 + this.feather;
-        b.minX = Math.min(b.minX, p.x - r);
-        b.minY = Math.min(b.minY, p.y - r);
-        b.maxX = Math.max(b.maxX, p.x + r);
-        b.maxY = Math.max(b.maxY, p.y + r);
-      }
-      this.cache.set(id, { samples, box: samples.length ? b : null });
-      grow(samples.length ? b : null);
     }
-    return box;
+    return boxes.length ? boxes : null;
+  }
+
+  /** Box around samples, including each one's half width and the feather. Used by update. */
+  #boxOf(samples) {
+    const b = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+    for (const p of samples) {
+      const r = p.w / 2 + this.feather;
+      b.minX = Math.min(b.minX, p.x - r);
+      b.minY = Math.min(b.minY, p.y - r);
+      b.maxX = Math.max(b.maxX, p.x + r);
+      b.maxY = Math.max(b.maxY, p.y + r);
+    }
+    return b;
   }
 
   /**

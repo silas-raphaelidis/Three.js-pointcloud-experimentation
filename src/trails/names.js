@@ -70,16 +70,18 @@ export const LIFT_NAMES = [
 
 /**
  * A random unused name from `list`, falling back to "<name> II", "<name> III"...
- * if every name is taken. Used by pickRunName and pickLiftName.
+ * if every name is taken. `random` returns a number in [0, 1); a seeded one
+ * makes a generated mountain's names repeat with its seed.
+ * Used by pickRunName and pickLiftName.
  */
-function pickFrom(list, usedNames) {
+function pickFrom(list, usedNames, random = Math.random) {
   const used = new Set(usedNames);
   const free = list.filter((n) => !used.has(n));
-  if (free.length) return free[Math.floor(Math.random() * free.length)];
+  if (free.length) return free[Math.floor(random() * free.length)];
   for (let k = 2; ; k++) {
     const roman = ['II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'][k - 2] ?? String(k);
     const candidates = list.map((n) => `${n} ${roman}`).filter((n) => !used.has(n));
-    if (candidates.length) return candidates[Math.floor(Math.random() * candidates.length)];
+    if (candidates.length) return candidates[Math.floor(random() * candidates.length)];
   }
 }
 
@@ -87,11 +89,11 @@ function pickFrom(list, usedNames) {
  * An unused name for a trail of the given rating (0 green .. 3 double black).
  * Used by the editor when a trail is finished.
  */
-export function pickRunName(ratingIndex, usedNames) {
-  return pickFrom(RUN_NAMES[Math.max(0, Math.min(3, ratingIndex))], usedNames);
+export function pickRunName(ratingIndex, usedNames, random) {
+  return pickFrom(RUN_NAMES[Math.max(0, Math.min(3, ratingIndex))], usedNames, random);
 }
 
 /** An unused name for a lift. Used by the editor when a lift is finished. */
-export function pickLiftName(usedNames) {
-  return pickFrom(LIFT_NAMES, usedNames);
+export function pickLiftName(usedNames, random) {
+  return pickFrom(LIFT_NAMES, usedNames, random);
 }

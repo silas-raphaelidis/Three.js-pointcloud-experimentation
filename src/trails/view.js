@@ -178,26 +178,26 @@ export class TrailView {
   }
 
   /**
-   * Is this point's dot drawn (and so grabbable)? Every trail's ends and
-   * junctions always are; other points only on the selected or hovered trail,
-   * so a whole mountain of trails doesn't drown in dots. Used by the editor's picking.
+   * Is this point's dot drawn (and so grabbable)? Lift ends always are, since
+   * that's where runs meet; every other point only while its trail is selected
+   * or hovered, so a whole mountain of trails doesn't drown in dots.
+   * Used by the editor's picking.
    */
   isNodeShown(nodeId) {
     return this.shownNodes.has(nodeId);
   }
 
   /**
-   * Rebuild the node dots: ends, junctions (in orange), and every point of the
-   * selected and hovered trails. Used by update and setState.
+   * Rebuild the node dots: lift ends, and every point of the selected and
+   * hovered trails, with junctions in orange. Used by update and setState.
    */
   #rebuildNodes() {
     const uses = new Map(); // node -> number of trails through it
     const shown = new Set();
     for (const t of this.network.trails.values()) {
       for (const node of new Set(t.points.map((p) => p.node))) uses.set(node, (uses.get(node) ?? 0) + 1);
-      if (t.points.length) shown.add(t.points[0].node).add(t.points[t.points.length - 1].node);
+      if (t.kind === 'lift') for (const p of t.points) shown.add(p.node);
     }
-    for (const [node, count] of uses) if (count > 1) shown.add(node);
     for (const id of [this.selectedTrail, ...this.hoverTrails]) {
       for (const p of this.network.trail(id)?.points ?? []) shown.add(p.node);
     }

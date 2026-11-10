@@ -8,7 +8,8 @@
  *   { type: 'generate', bases, lifts, runs, seed, thresholds }
  *       -> { bases, lifts, served, ms }          places lifts, starts run planning
  *   { type: 'next' }        -> a planned run, or null when the mountain is done
- *   { type: 'tried', run, samples } -> true if the routed run should be kept
+ *   { type: 'tried', run, samples, rating, ctrl }
+ *       -> { widths }: a width per control point if the routed run should be kept, else null
  *   { type: 'connected' }   -> true if every lift can reach every other by the runs kept
  */
 import { gridSlopes } from '../trails/pathfind.js';
@@ -38,7 +39,7 @@ self.onmessage = ({ data }) => {
   } else if (data.type === 'next') {
     answer(planner ? planner.next() : null);
   } else if (data.type === 'tried') {
-    answer(planner ? planner.tried(data.run, data.samples) : false);
+    answer({ widths: planner ? planner.tried(data.run, data.samples, data.rating, data.ctrl) : null });
   } else if (data.type === 'connected') {
     answer(planner ? planner.connected() : false);
   }

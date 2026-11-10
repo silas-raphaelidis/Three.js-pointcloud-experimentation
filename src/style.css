@@ -110,6 +110,36 @@ canvas { display: block; }
 .menu-panel .sep { height: 1px; margin: 4px 6px; background: #2f3746; }
 .menu-panel .header { padding: 7px 8px 3px 28px; color: #9aa3ad; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
 .menu-panel .row.radio .check { font-size: 9px; }
+#menubar .bar-button:disabled { color: #9aa3ad; cursor: default; background: none; }
+
+#mountain-dialog {
+  position: fixed; top: 38px; z-index: 16; width: 250px; padding: 10px 12px 12px;
+  font: 13px/1.4 system-ui, sans-serif; color: #e6e9ee;
+  background: rgba(22, 26, 33, 0.98); border: 1px solid #2f3746; border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+}
+#mountain-dialog[hidden] { display: none; }
+#mountain-dialog .title { margin-bottom: 8px; font-weight: 600; }
+#mountain-dialog .field { display: flex; align-items: center; justify-content: space-between; margin: 6px 0; }
+#mountain-dialog .stepper, #mountain-dialog .seed { display: flex; align-items: center; gap: 4px; }
+#mountain-dialog input {
+  width: 46px; padding: 4px 6px; font: inherit; text-align: center; color: inherit;
+  background: #0e1116; border: 1px solid #2f3746; border-radius: 5px;
+  -moz-appearance: textfield; appearance: textfield;
+}
+#mountain-dialog input::-webkit-inner-spin-button,
+#mountain-dialog input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+#mountain-dialog .seed input { width: 78px; }
+#mountain-dialog input:focus { outline: none; border-color: #9fd3ff; }
+#mountain-dialog button {
+  height: 26px; min-width: 26px; padding: 0 8px; font: inherit; color: inherit; cursor: pointer;
+  background: rgba(255, 255, 255, 0.06); border: 1px solid #2f3746; border-radius: 5px;
+}
+#mountain-dialog button:hover { background: rgba(159, 211, 255, 0.12); }
+#mountain-dialog .note { margin: 10px 0; color: #9aa3ad; font-size: 12px; }
+#mountain-dialog .actions { display: flex; justify-content: flex-end; gap: 6px; }
+#mountain-dialog .go { color: #0e1116; background: #9fd3ff; border-color: #9fd3ff; font-weight: 600; }
+#mountain-dialog .go:hover { background: #b8deff; }
 
 #legend {
   position: fixed; top: 46px; right: 12px; z-index: 5; width: 230px; padding: 10px 12px;

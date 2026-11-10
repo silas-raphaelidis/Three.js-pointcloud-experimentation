@@ -11,9 +11,8 @@ import { TrailRasterizer } from './trails/rasterize.js';
 import { TrailView } from './trails/view.js';
 import { TrailEditor } from './trails/editor.js';
 import { TrailGenerator } from './trails/generator.js';
-import { AnalysisOverlay, overlayGLSL } from './mountain/overlay.js';
 import { MountainGenerator } from './mountain/generator.js';
-import { randomSeed } from './mountain/random.js';
+import { MountainDialog } from './mountain/dialog.js';
 import { showToast } from './toast.js';
 import { difficulty, trailStats } from './trails/stats.js';
 import { TrailPanel } from './trails/panel.js';
@@ -83,11 +82,6 @@ const uniforms = {
   uZRange: { value: 1 },
   // Slope difficulty view: smoothed slope map + shared thresholds/colors.
   uSlope: { value: null },
-  // Mountain analysis debug tint (see mountain/overlay.js).
-  uOverlay: { value: null },
-  uOverlayOrigin: { value: new THREE.Vector2() },
-  uOverlayCell: { value: 1 },
-  uHasOverlay: { value: 0 },
   ...difficultyUniforms(),
 };
 bindDifficultyUniforms(uniforms);
@@ -113,7 +107,6 @@ const material = new THREE.ShaderMaterial({
     ${terrainGLSL}
     ${trailGLSL}
     ${difficultyGLSL}
-    ${overlayGLSL}
 
     // Height above ground -> color: blue at ground level, green at shrub
     // height, yellow/red for tall trees.
@@ -144,10 +137,6 @@ const material = new THREE.ShaderMaterial({
         } else if (uColorMode > 0.5) {
           vColor = hagColor(hag);
         }
-      }
-      if (uHasOverlay > 0.5) {
-        vec4 tint = overlayAt(pos.xy);
-        vColor = mix(vColor, tint.rgb, tint.a);
       }
 
       // ---- Trail clearing ----
@@ -431,7 +420,6 @@ let trailMask = null;
 let rasterizer = null;
 let trailView = null;
 let editor = null;
-let analysisOverlay = null;
 let mountainGenerator = null;
 const pendingTrails = new Set();
 let saveTimer = 0;
@@ -454,15 +442,15 @@ function setupTrails(t) {
   };
   trailView = new TrailView(network, geometry, t, overlay, ratingColor);
   trailView.setResolution(innerWidth, innerHeight);
+  trailView.group.visible = trailsShown;
   const trailGenerator = new TrailGenerator({ network, geometry, terrain: t });
   editor = new TrailEditor({
     network, geometry, terrain: t, camera, dom: renderer.domElement, controls, view: trailView,
     generator: trailGenerator,
     // Keeps the trail panel and menu bar in step with the editor.
     onStatus: (state) => { trailPanel.render(state); menuBar.refresh(); },
-    onLocked: () => trailLock.nudge(),
+    onLocked: () => explainLocked(),
   });
-  analysisOverlay = new AnalysisOverlay({ terrain: t, uniforms });
   mountainGenerator = new MountainGenerator({ terrain: t, network, editor, trailGenerator });
   uniforms.uTrail.value = trailMask.texture;
   uniforms.uHasTrail.value = 1;
@@ -470,26 +458,33 @@ function setupTrails(t) {
   // cut-into-the-forest animation is actually seen.
 }
 
+let generatingMountain = false;
+
 /**
- * TEMPORARY until the Generate mountain dialog exists: replace the network
- * with 2 bases, 6 lifts and 16 runs from a random seed. Used by the J key.
+ * Replace the network with a generated mountain, showing progress in the
+ * toast and the seed when done. Used by the Generate mountain dialog.
+ * @param {{ bases:number, lifts:number, runs:number, seed:number }} settings
  */
-async function generateMountainForTesting() {
-  if (!mountainGenerator) return;
-  const seed = randomSeed();
+async function generateMountain(settings) {
+  if (!mountainGenerator || generatingMountain) return;
+  if (editor.locked) { explainLocked(); return; }
+  generatingMountain = true;
+  mountainButton.disabled = true;
+  mountainButton.textContent = 'Generating…';
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
   showToast('Placing lifts…', 60000);
-  const result = await mountainGenerator.generate(
-    { bases: 2, lifts: 6, runs: 16, seed },
-    ({ runs }) => showToast(`Generating mountain · ${runs} run${runs === 1 ? '' : 's'} so far`, 60000),
-  );
-  if (!result) { showToast('Mountain generation failed.'); return; }
-  console.log(`[mountain] seed ${seed} · ${(result.ms / 1000).toFixed(1)} s`, result);
-  console.log('[mountain] runs (pass aimed→got kept): ' + result.attempts
-    .map((a) => `${a.pass[0]}${a.target}→${a.rating ?? 'x'}${a.kept ? '' : '✗'}`).join(' '));
-  if (result.stopped) { showToast('Mountain generation stopped.'); return; }
-  showToast(
-    `${result.lifts} lifts, ${result.runs} runs from ${result.bases} bases · seed ${seed}` +
-    (result.connected ? '' : ' · some lifts could not be connected'), 6000);
+  const result = await mountainGenerator.generate(settings, ({ runs }) =>
+    showToast(`Building the mountain · ${plural(runs, 'run')} so far · Esc to cancel`, 60000));
+  generatingMountain = false;
+  mountainButton.disabled = false;
+  mountainButton.textContent = 'Generate mountain';
+  if (!result) showToast('Mountain generation failed.', 4000);
+  else if (result.stopped) showToast('Mountain generation stopped.', 4000);
+  else {
+    showToast(
+      `${plural(result.lifts, 'lift')} and ${plural(result.runs, 'run')} from ${plural(result.bases, 'base')} · ` +
+      `seed ${settings.seed}${result.connected ? '' : ' · some lifts couldn’t be connected'}`, 6000);
+  }
 }
 
 /**
@@ -523,8 +518,8 @@ function processTrails() {
   if (!pendingTrails.size || !geometry) return;
   const ids = [...pendingTrails];
   pendingTrails.clear();
-  const box = geometry.update(ids);
-  rasterizer.rebuild(box, clock.getElapsedTime());
+  const boxes = geometry.update(ids);
+  rasterizer.rebuild(boxes, clock.getElapsedTime());
   trailView.update(ids);
   editor.refresh();
   saveTrailsSoon();
@@ -834,8 +829,9 @@ help.innerHTML = `
     <tr><td>Double-click / Enter</td><td>Finish the trail</td></tr>
     <tr><td>Second click (lift)</td><td>Place the other end</td></tr>
     <tr><td>Right-click, pick a difficulty</td><td>Generate a trail, then click where it ends</td></tr>
+    <tr><td>Generate mountain (top bar)</td><td>Replace everything with generated lifts and runs (Esc cancels)</td></tr>
     <tr><td>Right-click</td><td>Options for a point, trail or spot</td></tr>
-    <tr><td>Click / double-click a trail</td><td>Select it / add a point</td></tr>
+    <tr><td>Hover / click / double-click a trail</td><td>Show its points / select it / add a point</td></tr>
     <tr><td>Drag a point / handle</td><td>Move it / change width</td></tr>
     <tr><td>Shift-click a trail or point</td><td>Branch from there</td></tr>
     <tr><td>&minus; / =</td><td>Narrower / wider</td></tr>
@@ -844,6 +840,7 @@ help.innerHTML = `
     <tr><th colspan="2">View</th></tr>
     <tr><td>V &middot; E</td><td>Vegetation &middot; shading</td></tr>
     <tr><td>H &middot; D</td><td>Color by height above ground &middot; slope difficulty</td></tr>
+    <tr><td>T</td><td>Show / hide trail and lift lines (the cuts stay)</td></tr>
     <tr><td>G &middot; M</td><td>Ghost hidden trails (and let them be picked) &middot; ground surface</td></tr>
     <tr><td>[ ]</td><td>Point size</td></tr>
     <tr><td>P</td><td>FPS counter</td></tr>
@@ -881,6 +878,7 @@ function tickFps() {
 // One place for every display toggle. The View menu and the keyboard
 // shortcuts both go through these, so they always agree.
 let edlOn = true;
+let trailsShown = true; // applied to the trail drawings and editor once they exist
 let groundOn = false; // applied to the ground mesh once it exists
 let ghostTrails = false;
 
@@ -899,6 +897,16 @@ const view = {
     label: 'Eye-Dome Lighting', shortcut: 'E', default: true,
     get: () => edlOn,
     set: (on) => { edlOn = on; },
+  },
+  trails: {
+    label: 'Trails and lifts', shortcut: 'T', default: true,
+    get: () => trailsShown,
+    set: (on) => {
+      trailsShown = on;
+      // Hides the lines and points only; the cuts in the forest stay.
+      if (trailView) trailView.group.visible = on;
+      editor?.setTrailsHidden(!on);
+    },
   },
   ghost: {
     label: 'Ghost hidden trails', shortcut: 'G', default: false,
@@ -981,6 +989,7 @@ menuBar.addMenu('View', [
     format: (v) => `${v.toFixed(1)} m`,
   },
   { type: 'separator' },
+  { type: 'toggle', ...view.trails },
   { type: 'toggle', ...view.ghost },
   { type: 'toggle', ...view.fps },
   { type: 'separator' },
@@ -990,9 +999,27 @@ menuBar.addMenu('View', [
   { type: 'action', label: 'Reset to defaults', action: resetView },
 ]);
 menuBar.addButton({ label: 'Controls', shortcut: '?', action: () => { help.hidden = !help.hidden; } });
+// Opens the panel for generating a whole mountain; while one is being built it reads "Generating…".
+const mountainButton = menuBar.addButton({
+  label: 'Generate mountain',
+  action: () => {
+    if (editor?.locked) explainLocked();
+    else if (mountainGenerator) mountainDialog.toggle();
+  },
+});
+const mountainDialog = new MountainDialog({ anchor: mountainButton, onGenerate: generateMountain });
 
 // Lock button on the left edge: blocks trail selection and editing.
 const trailLock = new TrailLock({ onChange: (locked) => editor?.setLocked(locked) });
+
+/**
+ * Say why trails can't be edited right now: hidden from view, or locked.
+ * Passed to the editor as onLocked, and used by mountain generation.
+ */
+function explainLocked() {
+  if (editor?.trailsHidden) showToast('Trails and lifts are hidden · press T to show them');
+  else trailLock.nudge();
+}
 
 // Bottom-left panel for the selected trail, with an editable name.
 const trailPanel = new TrailPanel({ onRename: (id, name) => editor?.rename(id, name) });
@@ -1010,6 +1037,7 @@ addEventListener('keydown', (e) => {
     case 'd': case 'D': toggleColorMode(COLOR.difficulty); break;
     case 'e': case 'E': toggle(view.shading); break;
     case 'g': case 'G': toggle(view.ghost); break;
+    case 't': case 'T': toggle(view.trails); break;
     case 'p': case 'P': toggle(view.fps); break;
     case ']': uniforms.uSize.value = Math.min(4, uniforms.uSize.value * 1.2); break;
     case '[': uniforms.uSize.value = Math.max(0.6, uniforms.uSize.value / 1.2); break;
@@ -1017,8 +1045,6 @@ addEventListener('keydown', (e) => {
     case 'l': case 'L': trailLock.toggle(); break;
     case 'Home': if (homeView) flyTo(homeView.position, homeView.target); break;
     case '?': help.hidden = !help.hidden; break;
-    case 'k': case 'K': analysisOverlay?.cycle(); break; // temporary debug view
-    case 'j': case 'J': generateMountainForTesting(); break; // temporary
     default: return;
   }
   menuBar.refresh();

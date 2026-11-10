@@ -14,6 +14,8 @@ const MAX_WIDTH = 120;
 const UNDO_LIMIT = 60;
 const LIFT_WIDTH = 20;      // default width of the cut for a lift line, meters
 const WARNING_MS = 5000;    // how long generation warnings stay on screen
+const ATTACH_SNAP = 12;     // meters: a generated trail ending this close to a stop joins it
+const MIN_GENERATE = 30;    // meters: ends closer than this are too close to generate between
 
 /**
  * Mouse/keyboard editing of the trail network. Always on (there is no
@@ -30,21 +32,26 @@ const WARNING_MS = 5000;    // how long generation warnings stay on screen
  *                             ("Start new trail / lift here" on open terrain)
  *   drawing a lift: the second click places the other end and finishes it
  *   lifts stay at two points: no inserting points or branching mid-line
- *   generating a trail: pick a difficulty from the right-click menu, then
- *                             click where it should end (Esc cancels)
+ *   generating a trail: pick a difficulty from the right-click menu (on
+ *                             terrain, a point or a trail), then click where it
+ *                             should end: terrain, a point, or a trail's line,
+ *                             which joins it there (Esc cancels)
+ *   generating a mountain: Esc cancels and puts the old trails back
  *   while drawing: click adds a point, double-click / Enter finishes, Esc cancels
  *   - / =                     narrower / wider (selected point, or new trails)
  *   Delete · Ctrl+Z · Ctrl+Shift+Z · Esc   remove point · undo · redo · deselect
  *   Alt + drag                always orbits/pans, even over points (trackpads)
  *
  * When locked, trails can't be hovered, selected or edited; any attempt
- * calls onLocked() so the app can say so.
+ * calls onLocked() so the app can say so. The same holds while trails are
+ * hidden from view (View > Trails and lifts), since they can't be seen.
  */
 export class TrailEditor {
   /** Attaches the mouse and keyboard listeners. Created once in setupTrails (main.js). */
   constructor({ network, geometry, terrain, camera, dom, controls, view, generator, onStatus, onLocked }) {
     Object.assign(this, { network, geometry, terrain, camera, dom, controls, view, generator, onStatus, onLocked });
-    this.locked = false;
+    this.lockedByUser = false; // the lock button / L
+    this.trailsHidden = false; // trails and lifts turned off in the View menu
     this.pendingGenerate = null; // { from, target } waiting for the click that picks the end
     this.generation = null;      // { target } while a route search is running
     this.defaultWidth = 36;
@@ -80,8 +87,27 @@ export class TrailEditor {
    * Used by the lock button (TrailLock, through main.js).
    */
   setLocked(on) {
-    this.locked = on;
-    if (on) {
+    this.lockedByUser = on;
+    this.#applyLock();
+  }
+
+  /**
+   * Treat trails as locked while they're hidden from view, so nothing can be
+   * picked or edited blind. Used by the View menu's Trails and lifts option (main.js).
+   */
+  setTrailsHidden(on) {
+    this.trailsHidden = on;
+    this.#applyLock();
+  }
+
+  /** True while trails can't be selected or edited: locked, or hidden from view. */
+  get locked() {
+    return this.lockedByUser || this.trailsHidden;
+  }
+
+  /** Drop anything in progress once trails become locked. Used by setLocked and setTrailsHidden. */
+  #applyLock() {
+    if (this.locked) {
       this.#finishDrawing();
       this.pendingGenerate = null;
       this.generation = null;
@@ -195,17 +221,18 @@ export class TrailEditor {
    * is cleared as a single undo step, so Ctrl+Z brings it back however many
    * trails the build adds. Cancels any drawing or trail generation in
    * progress. Returns { token, trails }: the token for addToBuild, and the
-   * trails created from `trails` (see addToBuild for their shape).
+   * trails created from `trails` (see addToBuild for their shape). `random`
+   * (numbers in [0, 1)) picks the build's names, so a seeded one repeats them.
    * Used by MountainGenerator.
    */
-  startBuild(trails) {
+  startBuild(trails, random) {
     this.#cancelDrawing();
     this.generation = null; // a running trail generation drops its result
     this.#snapshot();
     this.#resetEditing();
     this.network.clear();
+    this.build = { token: Symbol('build'), random };
     const created = trails.map((spec) => this.#addSpec(spec));
-    this.build = { token: Symbol('build') };
     this.refresh();
     return { token: this.build.token, trails: created };
   }
@@ -220,7 +247,8 @@ export class TrailEditor {
 
   /**
    * Add a trail to a build without a separate undo step. `spec` is
-   * { kind, source, meta, points: [{x, y} | {node}, with optional width] };
+   * { kind, source, meta, points: [{x, y} | {node} | {trail, x, y}, with optional width] },
+   * where {trail, x, y} joins that trail at (about) x, y (see #resolveStops);
    * missing widths get the default for the kind, and the trail is named like a
    * hand-drawn one. Returns the trail, or null if the build has ended.
    * Used by MountainGenerator for each generated run.
@@ -230,6 +258,18 @@ export class TrailEditor {
     const t = this.#addSpec(spec);
     this.refresh();
     return t;
+  }
+
+  /**
+   * Stop the running build and put back the network it replaced, leaving
+   * nothing to redo, as if it never started. Used by Esc.
+   */
+  #cancelBuild() {
+    this.build = null;
+    const before = this.history.pop();
+    if (!before) return;
+    this.#resetEditing();
+    this.network.load(before);
   }
 
   /** Finish a build (if it's still the current one). Used by MountainGenerator. */
@@ -243,9 +283,9 @@ export class TrailEditor {
     const t = this.network.addTrail({
       name: kind === 'lift' ? 'New lift' : 'New trail',
       kind, source, meta,
-      points: points.map((p) => ({ ...p, width: p.width ?? width })),
+      points: this.#resolveStops(points.map((p) => ({ ...p, width: p.width ?? width }))),
     });
-    this.#giveDefaultName(t);
+    this.#giveDefaultName(t, this.build?.random);
     return t;
   }
 
@@ -496,17 +536,18 @@ export class TrailEditor {
 
   /**
    * Name a finished lift from the lift list, or a trail from the run-name list
-   * for its difficulty. Used by #finishDrawing, #runGenerate and #addSpec.
+   * for its difficulty, using `random` if given (see pickFrom in names.js).
+   * Used by #finishDrawing, #runGenerate and #addSpec.
    */
-  #giveDefaultName(t) {
+  #giveDefaultName(t, random) {
     const used = [...this.network.trails.values()].map((x) => x.name);
     if (this.network.isLift(t.id)) {
-      this.network.rename(t.id, pickLiftName(used));
+      this.network.rename(t.id, pickLiftName(used, random));
       return;
     }
     const samples = sampleSpline(this.geometry.controlPoints(t));
     const rating = trailStats(samples, this.terrain)?.rating.index ?? 0;
-    this.network.rename(t.id, pickRunName(rating, used));
+    this.network.rename(t.id, pickRunName(rating, used, random));
   }
 
   /** Throw away the trail being drawn. Used by Esc and the right-click menu. */
@@ -519,24 +560,32 @@ export class TrailEditor {
 
   /**
    * Wait for a click choosing where a generated trail should end.
-   * `from` is { x, y } or { node }. Used by the right-click menu.
+   * `from` is { x, y }, { node }, or { trail, x, y } (a spot on a trail's line).
+   * Used by the right-click menu.
    */
   #beginGenerate(from, target) {
     this.pendingGenerate = { from, target };
     this.selection = null;
   }
 
-  /** Use a clicked point or spot as the generated trail's other end. Used by #onUp. */
+  /**
+   * Use a clicked point, trail line (not a lift) or spot as the generated
+   * trail's other end. Clicks too close to the start are ignored. Used by #onUp.
+   */
   #chooseGenerateEnd(clicked) {
     const { from, target } = this.pendingGenerate;
     let to = null;
     if (clicked.type === 'node') {
       if (clicked.nodeId === from.node) return;
       to = { node: clicked.nodeId };
+    } else if (clicked.type === 'line' && !this.network.isLift(clicked.trailId)) {
+      to = { trail: clicked.trailId, x: clicked.x, y: clicked.y };
     } else if (clicked.world) {
       to = { x: clicked.world.x, y: clicked.world.y };
     }
     if (!to) return;
+    const a = this.#endPosition(from), b = this.#endPosition(to);
+    if (Math.hypot(a.x - b.x, a.y - b.y) < MIN_GENERATE) return;
     this.pendingGenerate = null;
     this.#runGenerate(from, to, target);
   }
@@ -554,20 +603,57 @@ export class TrailEditor {
     if (this.generation !== run) return; // cancelled while searching
     this.generation = null;
 
-    const endsExist = result?.points.every((p) => !p.node || this.network.node(p.node));
+    // The ends must still exist: an edit while searching could have removed them.
+    const endsExist = result?.points.every((p) =>
+      (!p.node || this.network.node(p.node)) && (!p.trail || this.network.trail(p.trail)));
     if (!endsExist) {
       showToast('No skiable route between these points.', WARNING_MS);
       this.refresh();
       return;
     }
     this.#snapshot();
-    const t = this.network.addTrail({ name: 'New trail', source: 'generated', meta: { target }, points: result.points });
+    const t = this.network.addTrail({
+      name: 'New trail', source: 'generated', meta: { target }, points: this.#resolveStops(result.points),
+    });
     this.#giveDefaultName(t);
     this.selection = { trailId: t.id, index: null };
     if (result.rating !== target) {
       showToast(`Couldn't make a ${RATINGS[target].name} here. This run rates ${RATINGS[result.rating].name}.`, WARNING_MS);
     }
     this.refresh();
+  }
+
+  /** Where an end given as { node }, { x, y } or { trail, x, y } is. */
+  #endPosition(end) {
+    return end.node ? this.network.node(end.node) : end;
+  }
+
+  /**
+   * Turn stops given as { trail, x, y, width } into junctions on that trail:
+   * an existing stop within ATTACH_SNAP is reused, otherwise a point is
+   * inserted on the trail's line there. Other stops pass through unchanged.
+   * Ends further along a trail are inserted first, so the insert positions of
+   * earlier ones (from the same, not yet re-sampled, geometry) stay right.
+   * Used whenever a generated trail is added.
+   */
+  #resolveStops(points) {
+    const out = points.map((p) => ({ ...p }));
+    const joins = points
+      .map((p, i) => (p.trail && this.network.trail(p.trail) ? { i, near: this.geometry.nearest(p.x, p.y, p.trail) } : null))
+      .filter((j) => j?.near)
+      .sort((a, b) => b.near.seg - a.near.seg || b.near.t - a.near.t);
+    for (const { i, near } of joins) {
+      const { trail: trailId, width } = points[i];
+      const stops = this.network.trail(trailId).points;
+      const close = stops.find((s) => {
+        const n = this.network.node(s.node);
+        return Math.hypot(n.x - near.x, n.y - near.y) < ATTACH_SNAP;
+      });
+      const node = close?.node ?? this.network.insertPoint(trailId, { x: near.x, y: near.y, width: near.w }, near.seg + 1);
+      out[i] = { node, width };
+    }
+    // A trail that vanished (or was never sampled) leaves a plain spot instead.
+    return out.map(({ trail, ...p }) => p);
   }
 
   /**
@@ -671,6 +757,8 @@ export class TrailEditor {
         items.push(
           { label: 'Branch from here', action: edit(() => this.#branchFromLine(h)) },
           { label: 'Insert point here', action: edit(() => this.#insertPoint(h)) },
+          ...generateItems({ trail: h.trailId, x: h.x, y: h.y }),
+          { type: 'separator' },
         );
       }
       items.push(
@@ -829,7 +917,8 @@ export class TrailEditor {
     } else if (e.key === 'Enter') {
       this.#finishDrawing();
     } else if (e.key === 'Escape') {
-      if (this.pendingGenerate) this.pendingGenerate = null;
+      if (this.build) this.#cancelBuild();
+      else if (this.pendingGenerate) this.pendingGenerate = null;
       else if (this.generation) this.generation = null;
       else if (this.drawing) this.#cancelDrawing();
       else this.selection = null;

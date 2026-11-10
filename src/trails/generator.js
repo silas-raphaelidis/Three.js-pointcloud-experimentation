@@ -52,11 +52,13 @@ export class TrailGenerator {
   /**
    * Find a run between two points, from whichever is higher to whichever is lower.
    * Returns null when no route exists, otherwise { points, rating, target }, where
-   * points can go straight to network.addTrail. `rating` may differ from `target`
-   * when the terrain doesn't allow it. Used by TrailEditor.
+   * points are trail stops; an end given as {trail, x, y} stays that way for the
+   * editor to join. `rating` may differ from `target` when the terrain doesn't
+   * allow it. Used by TrailEditor and MountainGenerator.
    *
-   * @param {{node?:string, x?:number, y?:number}} from  an existing node or a position
-   * @param {{node?:string, x?:number, y?:number}} to
+   * @param {{node?:string, trail?:string, x?:number, y?:number}} from  an existing node, a
+   *   position, or a position on a trail ({trail, x, y}: the editor joins the trail there)
+   * @param {{node?:string, trail?:string, x?:number, y?:number}} to
    * @param {number} target  rating index, 0 green .. 3 double black
    * @param {number} width   width of the new trail, meters
    * @param {{ coarseness?: number }} [opts]  scales how loosely the route is
@@ -90,7 +92,9 @@ export class TrailGenerator {
     }
     if (!best) return null;
 
-    const stop = (end) => (end.node ? { node: end.node, width } : { x: end.x, y: end.y, width });
+    const stop = (end) => (end.node ? { node: end.node, width }
+      : end.trail ? { trail: end.trail, x: end.x, y: end.y, width }
+      : { x: end.x, y: end.y, width });
     return {
       points: [stop(topEnd), ...best.middle.map((p) => ({ x: p.x, y: p.y, width })), stop(bottomEnd)],
       rating: best.rating,
