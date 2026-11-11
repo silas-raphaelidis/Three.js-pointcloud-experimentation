@@ -61,20 +61,21 @@ export class TrailGenerator {
    * @param {{node?:string, trail?:string, x?:number, y?:number}} to
    * @param {number} target  rating index, 0 green .. 3 double black
    * @param {number} width   width of the new trail, meters
-   * @param {{ coarseness?: number, via?: {x:number, y:number} }} [opts]
+   * @param {{ coarseness?: number, via?: {x:number, y:number}, ignore?: string }} [opts]
    *   coarseness: scales how loosely the route is simplified into control
    *   points (2 gives about half as many, for mountain generation).
    *   via: a spot the route must pass through on its way down (ignored if
    *   it isn't between the two ends in height).
+   *   ignore: a trail not to steer away from (the one a stretch is being added to).
    */
-  async generate(from, to, target, width, { coarseness = 1, via = null } = {}) {
+  async generate(from, to, target, width, { coarseness = 1, via = null, ignore = null } = {}) {
     this.#startWorker();
     const a = this.#position(from), b = this.#position(to);
     const aHigher = this.terrain.trailHeightAt(a.x, a.y) >= this.terrain.trailHeightAt(b.x, b.y);
     const [topEnd, bottomEnd] = aHigher ? [from, to] : [to, from];
     const top = aHigher ? a : b, bottom = aHigher ? b : a;
     const { lo, hi } = this.#band(target);
-    const avoid = this.#avoidMask();
+    const avoid = this.#avoidMask(ignore);
     // A via point splits the route into two legs, each searched on its own.
     const h = (p) => this.terrain.trailHeightAt(p.x, p.y);
     const useVia = via && h(via) < h(top) && h(via) > h(bottom);
@@ -161,12 +162,13 @@ export class TrailGenerator {
     return Math.max(400, straight * 3, (drop / hi) * 2);
   }
 
-  /** Mark the search cells close to existing trails. Used by generate. */
-  #avoidMask() {
+  /** Mark the search cells close to existing trails, except `ignore`. Used by generate. */
+  #avoidMask(ignore) {
     const { cols, rows, originX, originY } = this.grid;
     const mask = new Uint8Array(cols * rows);
     const r = Math.ceil(AVOID_RADIUS / CELL);
-    for (const [, { samples }] of this.geometry.entries()) {
+    for (const [id, { samples }] of this.geometry.entries()) {
+      if (id === ignore) continue;
       // A sample per cell is plenty; samples are about 2 m apart.
       for (let k = 0; k < samples.length; k += 5) {
         const ci = Math.floor((samples[k].x - originX) / CELL);

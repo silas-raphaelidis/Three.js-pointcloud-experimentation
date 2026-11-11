@@ -2,8 +2,13 @@ import * as THREE from 'three';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import { uphillStretches } from './stats.js';
 
 const LIFT = 1.5; // draw overlays slightly above the ground, meters
+const CHAIRLIFT_DASH = 16; // meters of line per dash on a lift
+const CHAIRLIFT_GAP = 10;  // meters between dashes
 
 export const COLORS = {
   lift: 0xff8a00,
@@ -13,6 +18,7 @@ export const COLORS = {
   junction: 0xff9a3c,
   handle: 0x9fd3ff,
   preview: 0x9fd3ff,
+  uphill: 0xff5cd6, // pink: unlike any difficulty, the selection or lifts
 };
 
 /** Round sprite so overlay points aren't squares. Used once by the TrailView constructor. */
@@ -32,8 +38,8 @@ function dotTexture() {
 
 /**
  * Draws the trail network on the overlay: centerlines, cut edges, control
- * points (junctions in orange), the selection with its width handles, and a
- * preview line while drawing. Read-only: it never edits the network.
+ * points (junctions in orange), the selection with its width handles, a
+ * preview line while drawing, and in pink where the selected run goes uphill. Read-only: it never edits the network.
  */
 export class TrailView {
   /**
@@ -88,12 +94,24 @@ export class TrailView {
     );
     this.preview.renderOrder = 2;
     this.group.add(this.preview);
+
+    // Where the selected (or drawn) run climbs, over its line.
+    this.uphill = new LineSegments2(
+      new LineSegmentsGeometry(),
+      new LineMaterial({ color: COLORS.uphill, linewidth: 7, depthTest: false, transparent: true })
+    );
+    this.uphill.material.resolution.copy(this.resolution);
+    this.uphill.renderOrder = 2.5;
+    this.uphill.visible = false;
+    this.group.add(this.uphill);
+    this.uphillFor = null; // the sampled trail the highlight was built from
   }
 
   /** Tell the fat lines the screen size. Used by setupTrails and the resize handler in main.js. */
   setResolution(w, h) {
     this.resolution.set(w, h);
     for (const { line } of this.trailObjects.values()) line.material.resolution.copy(this.resolution);
+    this.uphill.material.resolution.copy(this.resolution);
   }
 
   /** Height to draw overlays at: the ground plus LIFT. Used by everything drawn here. */
@@ -122,6 +140,31 @@ export class TrailView {
     }
     this.#rebuildNodes();
     this.#applySelectionColor();
+    this.#updateUphill();
+  }
+
+  /**
+   * Mark where the selected run goes uphill, rebuilt only when that trail or
+   * its shape changes. Lifts climb by design, so they're never marked.
+   * Used by update and setState.
+   */
+  #updateUphill() {
+    const id = this.selectedTrail;
+    const entry = id && !this.network.isLift(id) ? this.geometry.get(id) : null;
+    if (entry === this.uphillFor) return;
+    this.uphillFor = entry;
+    const pos = [];
+    for (const { from, to } of entry ? uphillStretches(entry.samples, this.terrain) : []) {
+      for (let i = from; i < to; i++) {
+        const a = entry.samples[i], b = entry.samples[i + 1];
+        pos.push(a.x, a.y, this.#ground(a.x, a.y), b.x, b.y, this.#ground(b.x, b.y));
+      }
+    }
+    this.uphill.visible = pos.length > 0;
+    if (pos.length) {
+      this.uphill.geometry.dispose();
+      this.uphill.geometry = new LineSegmentsGeometry().setPositions(pos);
+    }
   }
 
   /** Create a trail's center line and cut edges. Used by update. */
@@ -154,6 +197,11 @@ export class TrailView {
     line.material.resolution.copy(this.resolution);
     line.renderOrder = 2;
     line.userData.trailId = id;
+    // Lifts are dashed, so they stand apart from runs of similar colors.
+    if (this.network.isLift(id)) {
+      Object.assign(line.material, { dashed: true, dashSize: CHAIRLIFT_DASH, gapSize: CHAIRLIFT_GAP });
+      line.computeLineDistances();
+    }
 
     // Both edges in one LineSegments object.
     const seg = [];
@@ -245,11 +293,11 @@ export class TrailView {
    * @param {object} s
    * @param {string|null} s.selectedTrail
    * @param {string[]} s.hoverTrails  trails to highlight
-   * @param {{x:number,y:number}|null} s.highlightNode  node to ring
+   * @param {Array<{x:number,y:number}>} s.highlightNodes  nodes to ring
    * @param {Array<{x:number,y:number}>|null} s.handles  width handles
    * @param {{from:{x,y}, to:{x,y}}|null} s.preview      drawing preview
    */
-  setState({ selectedTrail = null, hoverTrails = [], highlightNode = null, handles = null, preview = null }) {
+  setState({ selectedTrail = null, hoverTrails = [], highlightNodes = [], handles = null, preview = null }) {
     const hoverKey = hoverTrails.join(',');
     if (selectedTrail !== this.selectedTrail || hoverKey !== this.hoverKey) {
       this.selectedTrail = selectedTrail;
@@ -258,7 +306,8 @@ export class TrailView {
       this.#applySelectionColor();
       this.#rebuildNodes();
     }
-    this.#setPoints(this.highlight, highlightNode ? [highlightNode] : []);
+    this.#updateUphill();
+    this.#setPoints(this.highlight, highlightNodes);
     this.#setPoints(this.handles, handles ?? []);
     this.#setPoints(this.widthBar, handles ?? []);
     this.#setPoints(this.preview, preview ? [preview.from, preview.to] : []);

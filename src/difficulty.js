@@ -3,7 +3,7 @@ import * as THREE from 'three';
 /**
  * Trail difficulty ratings by slope: one shared set of thresholds used by
  * the slope-difficulty view (shaders), the cursor readout, trail stats and
- * the legend. Thresholds are editable in the legend and saved locally.
+ * the legend. Thresholds are editable on the legend's slider and saved locally.
  *
  * Slopes are rise/run (0.25 = 25 %). Rough North American guide:
  *   beginner (green) < 25 %  ·  intermediate (blue) 25–40 %
@@ -65,7 +65,7 @@ export function getThresholds() { return [...thresholds]; }
 
 /**
  * Set one boundary (index 0..2), kept in order with at least 1 % between.
- * Used by the legend's number fields.
+ * Used by the legend's slider.
  */
 export function setThreshold(index, value) {
   const lo = index === 0 ? 0.01 : thresholds[index - 1] + 0.01;
@@ -213,40 +213,75 @@ export const difficultyGLSL = /* glsl */ `
 /** Slope (rise/run) as whole degrees. Used by the legend's "In degrees" line. */
 const toDegrees = (slope) => Math.round(THREE.MathUtils.radToDeg(Math.atan(slope)));
 
-/** Legend panel (right side) with editable thresholds. */
+/** Steepest slope on the legend's slider (80 % is about 39°). */
+const SLIDER_MAX = 0.8;
+
+/**
+ * Legend panel (right side): the four difficulties, a slider with a handle
+ * on each boundary between them, and the map's smoothing. Shown with the
+ * slope difficulty view, or on its own (opened from the small trail-color
+ * key) to adjust how trails are rated without recoloring the mountain.
+ */
 export class DifficultyLegend {
   /**
    * Builds the hidden legend and keeps it in step with any threshold or smoothing change.
    * Created once in main.js.
    */
   constructor() {
+    this.viewOn = false;   // the slope difficulty view is showing
+    this.settings = false; // opened on its own from the small key
+    this.dragging = null;  // index of the boundary being dragged
+    this.onToggle = null;  // called when opened or closed on its own (main.js updates the key)
     this.el = document.createElement('div');
     this.el.id = 'legend';
     this.el.hidden = true;
     document.body.appendChild(this.el);
     this.#render();
-    onThresholdsChange(() => this.#syncInputs());
-    onSmoothingChange(() => this.#syncInputs());
+    onThresholdsChange(() => this.#sync());
+    onSmoothingChange(() => this.#sync());
   }
 
-  /** Show or hide the legend. Used by setColorMode in main.js for the difficulty view. */
-  show(on) { this.el.hidden = !on; }
+  /**
+   * Show or hide the legend with the difficulty view. Turning the view off
+   * also closes it if it was opened on its own. Used by setColorMode in main.js.
+   */
+  show(on) {
+    this.viewOn = on;
+    if (!on) this.settings = false;
+    this.#apply();
+  }
 
-  /** Build the legend's HTML and wire up its inputs. Runs once, from the constructor. */
+  /** Is it showing on its own (not with the difficulty view)? */
+  get settingsOpen() { return this.settings && !this.viewOn; }
+
+  /** Open or close it on its own. Used by clicking the small trail-color key (main.js) and its ×. */
+  toggleSettings() {
+    this.settings = !this.settingsOpen;
+    this.#apply();
+    this.onToggle?.();
+  }
+
+  /** Show it for the view or on its own; on its own it has a close button and no smoothing. */
+  #apply() {
+    this.el.hidden = !(this.viewOn || this.settings);
+    this.el.classList.toggle('settings', this.settingsOpen);
+  }
+
+  /** Build the legend's HTML and wire up its controls. Runs once, from the constructor. */
   #render() {
-    // Slope as a whole percentage.
-    const pct = (v) => Math.round(v * 100);
-    const t = thresholds;
-    // HTML for the number field editing threshold i.
-    const input = (i) => `<input type="number" data-i="${i}" min="1" max="300" step="1" value="${pct(t[i])}">%`;
+    const row = (i) => `<div class="row"><span class="sw">${ratingIcon(i)}</span>` +
+      `<span class="name">${ratingLabel(i)}</span><span class="range" data-r="${i}"></span></div>`;
+    const between = ['Beginner to intermediate', 'Intermediate to advanced', 'Advanced to expert'];
     this.el.innerHTML = `
-      <div class="title">Slope difficulty</div>
-      <div class="rows">
-        <div class="row"><span class="sw">${ratingIcon(0)}</span><span class="name">${ratingLabel(0)}</span><span class="range">below ${input(0)}</span></div>
-        <div class="row"><span class="sw">${ratingIcon(1)}</span><span class="name">${ratingLabel(1)}</span><span class="range">to ${input(1)}</span></div>
-        <div class="row"><span class="sw">${ratingIcon(2)}</span><span class="name">${ratingLabel(2)}</span><span class="range">to ${input(2)}</span></div>
-        <div class="row"><span class="sw">${ratingIcon(3)}</span><span class="name">${ratingLabel(3)}</span><span class="range">above</span></div>
+      <div class="title"><span>Slope difficulty</span><button class="close" aria-label="Close">×</button></div>
+      <div class="note">Trails are rated by these slopes · press D to color the mountain by them</div>
+      <div class="rows">${[0, 1, 2, 3].map(row).join('')}</div>
+      <div class="slider">
+        <div class="track">${[0, 1, 2, 3].map((i) => `<span style="background:${RATINGS[i].color}"></span>`).join('')}</div>
+        ${between.map((label, i) => `<div class="thumb" data-i="${i}" tabindex="0" role="slider"
+          aria-label="${label}" aria-valuemin="0" aria-valuemax="${SLIDER_MAX * 100}"></div>`).join('')}
       </div>
+      <div class="scale"><span>0%</span><span>Drag the handles</span><span>${SLIDER_MAX * 100}%</span></div>
       <div class="degrees"></div>
       <div class="smoothing">
         <div class="label"><span>Smoothing</span><span class="value"></span></div>
@@ -255,36 +290,71 @@ export class DifficultyLegend {
       </div>
       <button class="reset">Reset to defaults</button>`;
 
-    const slider = this.el.querySelector('.smoothing input');
-    slider.addEventListener('input', () => setSmoothing(Number(slider.value)));
-
-    this.el.querySelectorAll('input[data-i]').forEach((el) => {
-      el.addEventListener('change', () => {
-        const v = Number(el.value);
-        if (Number.isFinite(v)) setThreshold(Number(el.dataset.i), v / 100);
-        else this.#syncInputs();
-      });
-      el.addEventListener('keydown', (e) => { if (e.key === 'Enter') el.blur(); });
-    });
+    const smooth = this.el.querySelector('.smoothing input');
+    smooth.addEventListener('input', () => setSmoothing(Number(smooth.value)));
+    this.el.querySelector('.close').addEventListener('click', () => this.toggleSettings());
     this.el.querySelector('.reset').addEventListener('click', () => {
       resetThresholds();
       setSmoothing(SMOOTHING.default);
     });
-    this.#syncInputs();
+
+    // Dragging: a press anywhere on the slider takes the nearest handle there.
+    const slider = this.el.querySelector('.slider');
+    const thumbs = [...slider.querySelectorAll('.thumb')];
+    const valueAt = (clientX) => {
+      const r = slider.getBoundingClientRect();
+      return Math.round(Math.min(1, Math.max(0, (clientX - r.left) / r.width)) * SLIDER_MAX * 100) / 100;
+    };
+    slider.addEventListener('pointerdown', (e) => {
+      const v = valueAt(e.clientX);
+      // Nearest handle; where two sit together, the one that can move that way.
+      let i = 0, best = Infinity;
+      thresholds.forEach((t, k) => {
+        const d = Math.abs(t - v);
+        if (d < best - 1e-9 || (Math.abs(d - best) < 1e-9 && v > t)) { best = d; i = k; }
+      });
+      e.preventDefault();
+      this.dragging = i;
+      try { slider.setPointerCapture(e.pointerId); } catch { /* synthetic event */ }
+      thumbs[i].focus();
+      setThreshold(i, v);
+    });
+    slider.addEventListener('pointermove', (e) => {
+      if (this.dragging !== null) setThreshold(this.dragging, valueAt(e.clientX));
+    });
+    const stop = () => { this.dragging = null; };
+    slider.addEventListener('pointerup', stop);
+    slider.addEventListener('pointercancel', stop);
+    // Arrow keys nudge the focused handle 1 % (5 % with Shift).
+    thumbs.forEach((thumb, i) => thumb.addEventListener('keydown', (e) => {
+      const dir = { ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1 }[e.key];
+      if (!dir) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setThreshold(i, Math.round((thresholds[i] + dir * (e.shiftKey ? 0.05 : 0.01)) * 100) / 100);
+    }));
+    this.#sync();
   }
 
-  /**
-   * Copy current values into the inputs, skipping the one being typed in.
-   * Runs after any threshold or smoothing change.
-   */
-  #syncInputs() {
+  /** Show the current thresholds and smoothing. Runs after any change to either. */
+  #sync() {
     const t = thresholds;
-    this.el.querySelectorAll('input[data-i]').forEach((el) => {
-      if (document.activeElement !== el) el.value = Math.round(t[Number(el.dataset.i)] * 100);
+    const pct = (v) => `${Math.round(v * 100)}%`;
+    const ranges = [`below ${pct(t[0])}`, `${pct(t[0])} – ${pct(t[1])}`, `${pct(t[1])} – ${pct(t[2])}`, `${pct(t[2])} and up`];
+    this.el.querySelectorAll('.range').forEach((el) => { el.textContent = ranges[Number(el.dataset.r)]; });
+    // Band widths and handle positions along the slider.
+    const at = (v) => Math.min(1, Math.max(0, v / SLIDER_MAX));
+    const edges = [0, at(t[0]), at(t[1]), at(t[2]), 1];
+    this.el.querySelectorAll('.track span').forEach((el, i) => { el.style.flexBasis = `${(edges[i + 1] - edges[i]) * 100}%`; });
+    this.el.querySelectorAll('.thumb').forEach((el, i) => {
+      el.style.left = `${edges[i + 1] * 100}%`;
+      el.setAttribute('aria-valuenow', String(Math.round(t[i] * 100)));
+      el.setAttribute('aria-valuetext', `${pct(t[i])} (${toDegrees(t[i])}°)`);
+      el.title = `${pct(t[i])} · ${toDegrees(t[i])}°`;
     });
     this.el.querySelector('.degrees').textContent = `In degrees: ${t.map((v) => `${toDegrees(v)}°`).join(' · ')}`;
-    const slider = this.el.querySelector('.smoothing input');
-    if (document.activeElement !== slider) slider.value = smoothing;
+    const smooth = this.el.querySelector('.smoothing input');
+    if (document.activeElement !== smooth) smooth.value = smoothing;
     this.el.querySelector('.smoothing .value').textContent = `${smoothing} m`;
   }
 }

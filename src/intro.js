@@ -1,11 +1,11 @@
 const SEEN_KEY = 'ascutney-intro-seen';
 
 /**
- * A short welcome for first-time visitors: what they're looking at and what
- * they can do, with buttons to generate a ski resort, see the controls, or
- * just explore. Shown once per browser (remembered in localStorage). The page
- * behind is only lightly dimmed, so the trails clearing the forest still
- * shows. Created once in main.js.
+ * A short welcome for first-time visitors: the mountain's story and what
+ * they can do, with buttons to generate a ski resort, show the controls
+ * (coming back here after), or start exploring. Shown once per browser
+ * (remembered in localStorage). The page behind is only lightly dimmed, so
+ * the trails clearing the forest still shows. Created once in main.js.
  */
 export class IntroCard {
   /**
@@ -20,15 +20,13 @@ export class IntroCard {
       <div class="card" role="dialog" aria-labelledby="intro-title">
         <button class="close" aria-label="Close">×</button>
         <h2 id="intro-title">Mount Ascutney, Vermont</h2>
-        <p class="points"></p>
-        <p>Ascutney was a ski resort from 1946 until it closed in 2010.
-          This is a way to bring it back to life.</p>
-        <p>Draw ski trails and the forest is cleared along them, each rated by how steep it is.
-          Or generate a whole ski resort, lifts and runs, in a few seconds.</p>
+        <p class="story"></p>
+        <p>Create your own trails and watch the forest clear, each one rated by how steep it
+          really skis. Or generate a complete ski resort, lifts and runs, in seconds.</p>
         <div class="actions">
           <button class="primary generate">Generate ski resort</button>
-          <button class="controls">See the controls</button>
-          <button class="explore">Just explore</button>
+          <button class="controls">Show controls</button>
+          <button class="explore">Start exploring</button>
         </div>
       </div>`;
     document.body.appendChild(this.el);
@@ -52,9 +50,15 @@ export class IntroCard {
     try {
       if (localStorage.getItem(SEEN_KEY)) return;
     } catch { /* storage blocked: show it every time rather than never */ }
-    this.el.querySelector('.points').textContent =
-      `A LiDAR scan of the whole mountain: ${(points / 1e6).toFixed(1)} million laser points ` +
-      'showing every tree and the ground beneath them.';
+    this.el.querySelector('.story').textContent =
+      'Mount Ascutney was home to a ski resort from 1946 until it closed in 2010. ' +
+      'Here you can bring it back to life on a LiDAR scan of the real mountain: ' +
+      `${(points / 1e6).toFixed(1)} million laser points capturing every tree and the ground beneath them.`;
+    this.show();
+  }
+
+  /** Show the card. Used on a first visit, and to come back after the controls. */
+  show() {
     this.el.hidden = false;
     this.el.querySelector('.generate').focus();
   }

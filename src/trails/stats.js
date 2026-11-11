@@ -88,3 +88,55 @@ export function trailStats(samples, terrain, window = 30) {
     rating: { index, name: r.name, color: r.text, mapColor: r.color, cruxLength },
   };
 }
+
+/** Meters a run must climb in one go to count as uphill: more than you'd coast over. */
+export const UPHILL_MIN_RISE = 3;
+/** A climb ends once the ground drops this far below its highest point, meters. */
+const UPHILL_END_DROP = 1;
+
+/**
+ * Stretches where a run climbs, going the way it's skied: from its higher
+ * end down to its lower end. A stretch starts at the lowest point before the
+ * climb and ends at the top of it, and only counts if it rises at least
+ * UPHILL_MIN_RISE. Heights are the lightly smoothed trail ground, as for
+ * the rating. Returns [{ from, to, rise, length }], with from < to as
+ * indexes into `samples`. Used by the trail panel (through the editor) and
+ * the uphill highlight on the map (TrailView).
+ * @param {Array<{x:number,y:number,s:number}>} samples  sampled spline
+ * @param {import('../terrain.js').Terrain} terrain
+ */
+export function uphillStretches(samples, terrain) {
+  const n = samples.length;
+  if (n < 2) return [];
+  const height = samples.map((p) => terrain.trailHeightAt(p.x, p.y));
+  // Indexes in skiing order, from the higher end.
+  const order = [...Array(n).keys()];
+  if (height[0] < height[n - 1]) order.reverse();
+  const z = (k) => height[order[k]];
+
+  const found = [];
+  // Close a climb from step `a` (its low point) to step `b` (its top).
+  const add = (a, b) => {
+    const i = order[a], j = order[b];
+    found.push({
+      from: Math.min(i, j), to: Math.max(i, j),
+      rise: z(b) - z(a), length: Math.abs(samples[j].s - samples[i].s),
+    });
+  };
+  let low = 0;      // lowest point since the last climb
+  let top = -1;     // highest point of the climb in progress, or -1
+  for (let k = 1; k < n; k++) {
+    if (top < 0) {
+      if (z(k) < z(low)) low = k;
+      else if (z(k) - z(low) >= UPHILL_MIN_RISE) top = k;
+    } else if (z(k) > z(top)) {
+      top = k;
+    } else if (z(top) - z(k) >= UPHILL_END_DROP) {
+      add(low, top);
+      low = k;
+      top = -1;
+    }
+  }
+  if (top >= 0) add(low, top);
+  return found;
+}

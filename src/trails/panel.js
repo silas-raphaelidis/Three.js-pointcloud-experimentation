@@ -25,6 +25,7 @@ export class TrailPanel {
       <div class="stats"></div>
       <div class="bar"></div>
       <div class="breakdown"></div>
+      <div class="uphill"></div>
       <div class="point"></div>
       <div class="hint"></div>`;
     document.body.appendChild(this.el);
@@ -47,11 +48,12 @@ export class TrailPanel {
   /**
    * Show the given state, or hide the panel for null.
    * Called from onStatus in main.js on every editor refresh.
-   * @param {null | {kind:'drawing', lift:boolean, points:number}
-   *   | {kind:'generate', busy:boolean, rating:string}
+   * @param {null | {kind:'drawing', lift:boolean, points:number, mode:string|null, routing:boolean}
    *   | {kind:'trail', lift:boolean, trailId:string, name:string, stats:object|null,
    *      serves: number[]|null (a lift's: ratings of the runs off its top),
-   *      point: null | {index:number, count:number, junction:boolean, width:number}}} state
+   *      uphill: Array<{rise:number, length:number}> (a run's climbs, see uphillStretches),
+   *      point: null | {index:number, count:number, junction:boolean, width:number,
+   *        selected:number, minWidth:number, maxWidth:number}}} state
    */
   render(state) {
     this.el.hidden = !state;
@@ -66,20 +68,12 @@ export class TrailPanel {
       q('.drawing').innerHTML = state.lift
         ? '<b>New lift</b>'
         : `<b>New trail</b> · ${state.points} point${state.points === 1 ? '' : 's'}`;
-      for (const s of ['.stats', '.bar', '.breakdown', '.point']) q(s).hidden = true;
-      q('.hint').textContent = state.lift
-        ? 'Click to place the other end · Esc to cancel'
-        : 'Click to add points · double-click or Enter to finish · Esc to cancel';
-      return;
-    }
-
-    if (state.kind === 'generate') {
-      this.trailId = null;
-      this.name.hidden = true;
-      q('.drawing').hidden = false;
-      q('.drawing').innerHTML = `<b>${state.busy ? 'Generating' : 'Generate'} ${state.rating} trail</b>`;
-      for (const s of ['.stats', '.bar', '.breakdown', '.point']) q(s).hidden = true;
-      q('.hint').textContent = state.busy ? 'Finding a route · Esc to cancel' : 'Click where it should end · Esc to cancel';
+      for (const s of ['.stats', '.bar', '.breakdown', '.uphill', '.point']) q(s).hidden = true;
+      q('.hint').textContent =
+        state.lift ? 'Click to place the other end'
+        : state.routing ? 'Finding a route…'
+        : state.mode ? `Click where it should go: ${/^[aeiou]/.test(state.mode) ? 'an' : 'a'} ${state.mode} route is found · double-click to finish`
+        : 'Click to add points · double-click to finish';
       return;
     }
 
@@ -117,20 +111,32 @@ export class TrailPanel {
         .join(' · ');
     }
 
+    // Where a run climbs (marked in pink on the map, see TrailView).
+    const up = state.uphill ?? [];
+    q('.uphill').hidden = !up.length;
+    if (up.length) {
+      const most = Math.round(Math.max(...up.map((u) => u.rise)));
+      q('.uphill').innerHTML = '<i></i>' + (up.length === 1
+        ? `Goes uphill: climbs ${most} m over ${Math.round(up[0].length)} m`
+        : `Goes uphill in ${up.length} places, climbing up to ${most} m`);
+    }
+
     const p = state.point;
     q('.point').hidden = !p;
-    if (p) {
+    const several = p?.selected > 1;
+    if (several) {
+      const w = (x) => x.toFixed(0);
+      const range = w(p.minWidth) === w(p.maxWidth) ? w(p.minWidth) : `${w(p.minWidth)}–${w(p.maxWidth)}`;
+      q('.point').textContent = `${p.selected} points selected · width ${range} m`;
+    } else if (p) {
       q('.point').textContent =
         `Point ${p.index + 1}/${p.count}${p.junction ? ' (junction)' : ''} · width ${p.width.toFixed(0)} m`;
     }
-    if (state.lift) {
-      q('.hint').textContent = p
-        ? 'Drag handles or − = for width · Del deletes the lift · B branches'
-        : 'Drag either end to move it · F to frame';
-      return;
-    }
-    q('.hint').textContent = p
-      ? 'Drag handles or − = for width · Del removes · B branches'
-      : 'Double-click the trail to add a point · drag points to reshape · F to frame';
+    // Gestures only: the action bar has the buttons and keys.
+    q('.hint').textContent =
+      several ? 'Drag any selected point to move them together · Shift-click to add or remove points'
+      : p ? 'Drag the side handles to change the width · Shift-click to select more points'
+      : state.lift ? 'Drag either end to move it'
+      : 'Double-click the trail to add a point · drag points to reshape';
   }
 }

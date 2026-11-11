@@ -18,8 +18,9 @@ else is written from scratch.
 - **Draw trails and lifts.** Right-click to start one. As a trail is drawn the trees
   inside it fall and the cut turns to snow. Drag points to reshape it, change its
   width along its length, or branch new trails off it.
-- **Generate a trail.** Pick a difficulty and two ends; a route search finds a line
-  down the mountain at that difficulty, steering around existing trails.
+- **Generate a trail.** While drawing, pick a difficulty and click where the trail
+  should go; a route search finds a line there at that difficulty, steering around
+  existing trails. Mix routed stretches with hand-drawn ones as you like.
 - **Generate a ski resort.** Choose how many bases, lifts and runs, and a seed. The same
   seed always gives the same resort.
 

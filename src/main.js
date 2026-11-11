@@ -18,6 +18,7 @@ import { HelpPanel } from './help.js';
 import { IntroCard } from './intro.js';
 import { difficulty, trailStats } from './trails/stats.js';
 import { TrailPanel } from './trails/panel.js';
+import { ActionBar } from './trails/actionbar.js';
 import { GroundMesh } from './ground.js';
 import { withRetry } from './retry.js';
 import { LoadingScreen } from './loading.js';
@@ -321,6 +322,11 @@ const other = new THREE.Color(0x8a8f99);
 const hud = document.createElement('div');
 hud.id = 'hud';
 document.body.appendChild(hud);
+// The small trail-color key opens (or closes) the difficulty slopes, without
+// switching the mountain to the difficulty colors.
+hud.addEventListener('click', (e) => {
+  if (e.target.closest('.key')) legend.toggleSettings();
+});
 let loadedPoints = 0;
 let totalPoints = 0;
 let loadStatus = '';
@@ -342,14 +348,17 @@ function updateHud(extra) {
 /**
  * A small key to the trail line colors, under the info box. Shown while the
  * View menu's Legend option is on and trails are showing, except in the slope
- * difficulty view, whose own legend explains the colors. Used by updateHud.
+ * difficulty view, whose own legend explains the colors. Clicking it opens
+ * the difficulty slopes on their own (see the click handler on #hud). Used by updateHud.
  */
 function colorKeyHtml() {
   if (!colorKeyOn || !trailsShown || uniforms.uColorMode.value === COLOR.difficulty) return '';
   const hex = (n) => `#${n.toString(16).padStart(6, '0')}`;
   const difficulties = RATINGS.map((_, i) => `<span>${ratingIcon(i)}${ratingLabel(i)}</span>`).join('');
-  const lift = `<span><i style="background:${hex(TRAIL_COLORS.lift)}"></i>Lift</span>`;
-  return `<div class="key">${difficulties}${lift}</div>`;
+  // Dashed, like lift lines on the map.
+  const lift = `<span><i style="background:repeating-linear-gradient(90deg, ${hex(TRAIL_COLORS.lift)} 0 5px, transparent 5px 8px)"></i>Lift</span>`;
+  const adjust = `<span class="adjust">${legend.settingsOpen ? 'Close slopes ×' : 'Adjust slopes ›'}</span>`;
+  return `<div class="key" title="Adjust the slopes each difficulty starts at">${difficulties}${lift}${adjust}</div>`;
 }
 
 // ---------- Terrain + cursor ----------
@@ -471,8 +480,14 @@ function setupTrails(t) {
     network, geometry, terrain: t, camera, dom: renderer.domElement, controls, view: trailView,
     generator: trailGenerator,
     // Keeps the trail panel and menu bar in step with the editor.
-    onStatus: (state) => { trailPanel.render(state); menuBar.refresh(); },
+    onStatus: (state, actions) => {
+      trailPanel.render(state);
+      actionBar.render(actions);
+      menuBar.refresh();
+      updateUndoButtons();
+    },
     onLocked: () => explainLocked(),
+    onFrame: () => frameSelected(),
   });
   mountainGenerator = new MountainGenerator({ terrain: t, network, editor, trailGenerator });
   uniforms.uTrail.value = trailMask.texture;
@@ -552,7 +567,12 @@ function processTrails() {
 }
 
 // Debug/console access, e.g. copy(JSON.stringify(trails.network.toJSON()))
-window.trails = { network, get editor() { return editor; } };
+window.trails = {
+  network,
+  get editor() { return editor; },
+  // Height-above-ground colors, kept for debugging now they're out of the View menu.
+  heightView: (on = true) => setColorMode(on ? COLOR.height : COLOR.natural),
+};
 
 
 // ---------- Loading ----------
@@ -588,7 +608,8 @@ async function load() {
   camera.far = size * 6;
   camera.updateProjectionMatrix();
   edlUniforms.uFar.value = camera.far;
-  homeView = { position: camera.position.clone(), target: controls.target.clone() };
+  mountainExtent = { size, center: controls.target.clone() };
+  limitZoomOut();
 
   // Progress: points are most of the work; the height map is the rest.
   let heightReady = false;
@@ -737,6 +758,7 @@ load().catch((err) => {
 controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.ROTATE, RIGHT: null };
 controls.zoomToCursor = true;
 controls.minDistance = 2;
+const BIRDS_EYE_TILT = 65; // degrees below the horizon for "Frame whole mountain"
 
 // Keep the orbit center on the terrain surface. It's moved along the current
 // view line (so the view doesn't jump) to where that line meets the ground.
@@ -783,7 +805,35 @@ renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 renderer.domElement.addEventListener('mousedown', (e) => { if (e.button === 1) e.preventDefault(); });
 
 // Smooth camera moves for F / Home.
-let homeView = null;
+let mountainExtent = null; // { size, center } of the map, once loaded
+
+/**
+ * How far back the camera must be to fit the whole map, for the window's
+ * current shape (whichever of its width or height is tighter).
+ */
+function wholeMountainDistance() {
+  const halfV = THREE.MathUtils.degToRad(camera.fov) / 2;
+  const halfH = Math.atan(Math.tan(halfV) * camera.aspect);
+  return (mountainExtent.size * 0.62) / Math.tan(Math.min(halfV, halfH));
+}
+
+/**
+ * Fly to a bird's-eye view of the whole mountain: looking down from the
+ * south at BIRDS_EYE_TILT, so it reads as a map but still in 3D.
+ * Used by Home and the View menu.
+ */
+function frameWholeMountain() {
+  if (!mountainExtent) return;
+  const dist = wholeMountainDistance();
+  const tilt = THREE.MathUtils.degToRad(BIRDS_EYE_TILT);
+  const { center } = mountainExtent;
+  flyTo(new THREE.Vector3(center.x, center.y - dist * Math.cos(tilt), center.z + dist * Math.sin(tilt)), center);
+}
+
+/** Don't let the camera zoom out much past the whole-mountain view. Run at load and on resize. */
+function limitZoomOut() {
+  if (mountainExtent) controls.maxDistance = wholeMountainDistance() * 1.25;
+}
 let flight = null; // { from: {position, target}, to: {position, target}, t0 }
 const FLIGHT_S = 0.45;
 
@@ -868,11 +918,13 @@ function tickFps() {
 // ---------- View options ----------
 // One place for every display toggle. The View menu and the keyboard
 // shortcuts both go through these, so they always agree.
-let edlOn = true;
+// Eye-Dome Lighting is always on, the ground surface always hidden and hidden
+// trails never ghosted; they're out of the View menu, but the code paths stay.
+const edlOn = true;
+const groundOn = false;   // applied to the ground mesh once it exists
+const ghostTrails = false;
 let trailsShown = true; // applied to the trail drawings and editor once they exist
 let colorKeyOn = true;  // the small key to trail colors under the info box
-let groundOn = false; // applied to the ground mesh once it exists
-let ghostTrails = false;
 
 const view = {
   vegetation: {
@@ -880,15 +932,10 @@ const view = {
     get: () => uniforms.uShowVeg.value > 0.5,
     set: (on) => { uniforms.uShowVeg.value = on ? 1 : 0; },
   },
-  ground: {
-    label: 'Ground surface', shortcut: 'M', default: false,
-    get: () => groundOn,
-    set: (on) => { groundOn = on; if (ground) ground.mesh.visible = on; },
-  },
-  shading: {
-    label: 'Eye-Dome Lighting', shortcut: 'E', default: true,
-    get: () => edlOn,
-    set: (on) => { edlOn = on; },
+  difficulty: {
+    label: 'Slope difficulty', shortcut: 'D', default: false,
+    get: () => colorMode() === COLOR.difficulty,
+    set: (on) => setColorMode(on ? COLOR.difficulty : COLOR.natural),
   },
   trails: {
     label: 'Trails and lifts', shortcut: 'T', default: true,
@@ -906,15 +953,6 @@ const view = {
     get: () => colorKeyOn,
     set: (on) => { colorKeyOn = on; updateHud(); },
   },
-  ghost: {
-    label: 'Ghost hidden trails', shortcut: 'G', default: false,
-    get: () => ghostTrails,
-    set: (on) => {
-      ghostTrails = on;
-      // Ghosted trails are visible, so they can be picked through terrain.
-      if (editor) editor.pickHidden = on;
-    },
-  },
   fps: {
     label: 'FPS counter', shortcut: 'P', default: true,
     get: () => !fps.hidden,
@@ -924,14 +962,16 @@ const view = {
 /** Flip a view option. Used by the keyboard shortcuts. */
 const toggle = (opt) => opt.set(!opt.get());
 
-// "Color by" is one choice of three; the legend shows with the difficulty view.
+// Point colors: natural, or by slope difficulty (with its legend). Height above
+// ground is only reachable from the console (trails.heightView()), for debugging.
 const COLOR = { natural: 0, height: 1, difficulty: 2 };
 const legend = new DifficultyLegend();
+legend.onToggle = () => updateHud(); // the key says "Adjust" or "Close"
 /** Current color mode (a COLOR value). */
 const colorMode = () => uniforms.uColorMode.value;
 /**
  * Change the color mode and show the legend for the difficulty view.
- * Used by the View menu and toggleColorMode.
+ * Used by the Slope difficulty view option and trails.heightView.
  */
 function setColorMode(mode) {
   uniforms.uColorMode.value = mode;
@@ -939,14 +979,6 @@ function setColorMode(mode) {
   pointerDirty = true; // the cursor readout only shows in the difficulty view
   updateHud(); // the small color key hides while the full legend is up
 }
-/** Keys H / D: switch to that mode, or back to natural if it's already on. */
-const toggleColorMode = (mode) => setColorMode(colorMode() === mode ? COLOR.natural : mode);
-/** Build a View menu radio row for one color mode. */
-const colorItem = (label, mode, shortcut) => ({
-  type: 'radio', label, shortcut,
-  get: () => colorMode() === mode,
-  set: () => setColorMode(mode),
-});
 
 const DEFAULT_POINT_SIZE = uniforms.uSize.value;
 /**
@@ -974,14 +1006,7 @@ onSmoothingChange((meters) => {
 const menuBar = new MenuBar();
 menuBar.addMenu('View', [
   { type: 'toggle', ...view.vegetation },
-  { type: 'toggle', ...view.ground },
-  { type: 'separator' },
-  { type: 'header', label: 'Color by' },
-  colorItem('Natural', COLOR.natural),
-  colorItem('Height above ground', COLOR.height, 'H'),
-  colorItem('Slope difficulty', COLOR.difficulty, 'D'),
-  { type: 'separator' },
-  { type: 'toggle', ...view.shading },
+  { type: 'toggle', ...view.difficulty },
   {
     type: 'range', label: 'Point size', min: 0.6, max: 4, step: 0.1,
     get: () => uniforms.uSize.value,
@@ -991,11 +1016,10 @@ menuBar.addMenu('View', [
   { type: 'separator' },
   { type: 'toggle', ...view.trails },
   { type: 'toggle', ...view.colorKey },
-  { type: 'toggle', ...view.ghost },
   { type: 'toggle', ...view.fps },
   { type: 'separator' },
   { type: 'action', label: 'Frame selected', shortcut: 'F', action: () => frameSelected(), enabled: () => !!editor?.selection },
-  { type: 'action', label: 'Frame whole mountain', shortcut: 'Home', action: () => homeView && flyTo(homeView.position, homeView.target) },
+  { type: 'action', label: 'Frame whole mountain', shortcut: 'Home', action: () => frameWholeMountain() },
   { type: 'separator' },
   { type: 'action', label: 'Reset to defaults', action: resetView },
 ]);
@@ -1009,8 +1033,12 @@ const mountainButton = menuBar.addButton({
   },
 });
 const mountainDialog = new MountainDialog({ anchor: mountainButton, onGenerate: generateMountain });
-// First-visit welcome; its buttons open the panels above.
-const intro = new IntroCard({ onGenerate: () => mountainDialog.open(), onControls: () => help.open() });
+// First-visit welcome; its buttons open the panels above. Closing the
+// controls opened from it brings the welcome back.
+const intro = new IntroCard({
+  onGenerate: () => mountainDialog.open(),
+  onControls: () => help.open(() => intro.show()),
+});
 // Removes every trail and lift; one Ctrl+Z brings them back.
 menuBar.addButton({
   label: 'Clear mountain',
@@ -1020,6 +1048,18 @@ menuBar.addButton({
     else if (!editor.locked) showToast('Nothing to clear');
   },
 });
+// Undo and redo, as well as Ctrl+Z and Ctrl+Shift+Z; greyed out when there's nothing to do.
+// On narrow screens only the arrows show (see .wide in style.css).
+const undoButton = menuBar.addButton({ label: '↶<span class="wide"> Undo</span>', action: () => editor?.undo() });
+const redoButton = menuBar.addButton({ label: '↷<span class="wide"> Redo</span>', action: () => editor?.redo() });
+undoButton.title = 'Undo (Ctrl+Z)';
+redoButton.title = 'Redo (Ctrl+Shift+Z)';
+/** Grey out undo and redo when there's nothing to undo or redo. Run on every editor refresh. */
+function updateUndoButtons() {
+  undoButton.disabled = !editor?.canUndo;
+  redoButton.disabled = !editor?.canRedo;
+}
+updateUndoButtons();
 
 // Lock button on the left edge: blocks trail selection and editing.
 const trailLock = new TrailLock({ onChange: (locked) => editor?.setLocked(locked) });
@@ -1035,6 +1075,8 @@ function explainLocked() {
 
 // Bottom-left panel for the selected trail, with an editable name.
 const trailPanel = new TrailPanel({ onRename: (id, name) => editor?.rename(id, name) });
+// Bottom-center buttons for what you can do right now (see TrailEditor.actions).
+const actionBar = new ActionBar({ avoid: trailPanel.el });
 
 // ---------- Keys ----------
 // Is the user typing in a field? If so, the shortcuts below are ignored.
@@ -1044,18 +1086,14 @@ addEventListener('keydown', (e) => {
   if (typing(e) || e.ctrlKey || e.metaKey || e.altKey) return;
   switch (e.key) {
     case 'v': case 'V': toggle(view.vegetation); break;
-    case 'm': case 'M': toggle(view.ground); break;
-    case 'h': case 'H': toggleColorMode(COLOR.height); break;
-    case 'd': case 'D': toggleColorMode(COLOR.difficulty); break;
-    case 'e': case 'E': toggle(view.shading); break;
-    case 'g': case 'G': toggle(view.ghost); break;
+    case 'd': case 'D': toggle(view.difficulty); break;
     case 't': case 'T': toggle(view.trails); break;
     case 'p': case 'P': toggle(view.fps); break;
     case ']': uniforms.uSize.value = Math.min(4, uniforms.uSize.value * 1.2); break;
     case '[': uniforms.uSize.value = Math.max(0.6, uniforms.uSize.value / 1.2); break;
     case 'f': case 'F': frameSelected(); break;
     case 'l': case 'L': trailLock.toggle(); break;
-    case 'Home': if (homeView) flyTo(homeView.position, homeView.target); break;
+    case 'Home': frameWholeMountain(); break;
     case '?': help.toggle(); break;
     default: return;
   }
@@ -1065,6 +1103,7 @@ addEventListener('keydown', (e) => {
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
+  limitZoomOut();
   renderer.setSize(innerWidth, innerHeight);
   resizeTargets();
   updateProjScale();

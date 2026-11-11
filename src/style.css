@@ -13,6 +13,10 @@ canvas { display: block; }
 }
 #hud .key span { display: inline-flex; align-items: center; gap: 5px; }
 #hud .key i { width: 14px; height: 4px; border-radius: 2px; }
+/* The key opens the difficulty slopes (the rest of the info box lets clicks through). */
+#hud .key { pointer-events: auto; cursor: pointer; margin: 6px -4px 0; padding: 6px 4px 2px; border-radius: 0 0 5px 5px; }
+#hud .key:hover { background: rgba(255, 255, 255, 0.06); }
+#hud .key .adjust { color: #9fd3ff; }
 #hud .cursor { font-variant-numeric: tabular-nums; }
 #hud .editor {
   margin: 4px 0; padding: 6px 8px; border-left: 2px solid #9fd3ff;
@@ -34,21 +38,29 @@ canvas { display: block; }
 }
 #help[hidden] { display: none; }
 #help .dialog {
-  width: min(760px, 100%); max-height: calc(100vh - 32px); overflow: auto; box-sizing: border-box;
-  padding: 16px 20px 20px; font: 13px/1.4 system-ui, sans-serif; color: #e6e9ee;
+  width: min(460px, 100%); max-height: calc(100vh - 32px); overflow: auto; box-sizing: border-box;
+  padding: 0; font: 13px/1.4 system-ui, sans-serif; color: #e6e9ee;
   background: #12161c; border: 1px solid #2a3140; border-radius: 12px;
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
 }
-#help .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+#help .head {
+  position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 20px 10px; background: #12161c;
+}
 #help h3 { margin: 0; font-size: 16px; }
 #help .close {
   width: 28px; height: 28px; font: 18px/1 system-ui, sans-serif; color: #9aa3ad; cursor: pointer;
   background: transparent; border: 0; border-radius: 6px;
 }
 #help .close:hover { color: #e6e9ee; background: rgba(255, 255, 255, 0.08); }
-/* Two balanced columns when there's room, one when there isn't. */
-#help .sections { columns: 2 300px; column-gap: 32px; }
-#help section { break-inside: avoid; margin-bottom: 14px; }
+#help .sections { padding: 0 20px; }
+#help section { margin-bottom: 14px; }
+/* "Scroll for more" cue, pinned to the bottom until you get there. */
+#help .more {
+  position: sticky; bottom: 0; padding: 18px 20px 10px; text-align: center; pointer-events: none;
+  color: #9fd3ff; font-size: 12px; background: linear-gradient(rgba(18, 22, 28, 0), #12161c 55%);
+}
+#help .more.done { visibility: hidden; }
 #help h4 {
   margin: 0 0 4px; color: #9fd3ff; font-size: 11px; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.06em;
@@ -169,7 +181,12 @@ canvas { display: block; }
 .menu-panel .sep { height: 1px; margin: 4px 6px; background: #2f3746; }
 .menu-panel .header { padding: 7px 8px 3px 28px; color: #9aa3ad; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
 .menu-panel .row.radio .check { font-size: 9px; }
-#menubar .bar-button:disabled { color: #9aa3ad; cursor: default; background: none; }
+#menubar .bar-button:disabled { color: #5d6672; cursor: default; background: none; }
+#menubar button { white-space: nowrap; flex: none; }
+@media (max-width: 640px) {
+  #menubar .wide { display: none; }
+  #menubar button { padding: 0 7px; }
+}
 
 #mountain-dialog {
   position: fixed; top: 38px; z-index: 16; width: 250px; padding: 10px 12px 12px;
@@ -205,7 +222,32 @@ canvas { display: block; }
   font: 13px/1.4 system-ui, sans-serif; color: #e6e9ee;
   background: rgba(14, 17, 22, 0.85); border: 1px solid #262d39; border-radius: 8px;
 }
-#legend .title { margin-bottom: 8px; font-weight: 600; }
+#legend .title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-weight: 600; }
+#legend .close {
+  display: none; width: 22px; height: 22px; padding: 0; font-size: 16px; line-height: 1; color: #9aa3ad;
+  background: none; border: none; border-radius: 4px; cursor: pointer;
+}
+#legend .close:hover { color: #e6e9ee; background: rgba(255, 255, 255, 0.08); }
+#legend .note { display: none; margin: -4px 0 8px; color: #9aa3ad; font-size: 11px; }
+/* Opened on its own from the small key: closable, and no map-only smoothing. */
+#legend.settings .close { display: block; }
+#legend.settings .note { display: block; }
+#legend.settings .smoothing { display: none; }
+/* One slider, a handle on each boundary between the four difficulties. */
+#legend .slider { position: relative; height: 22px; margin: 10px 7px 2px; cursor: pointer; touch-action: none; }
+#legend .track {
+  position: absolute; left: 0; right: 0; top: 8px; height: 6px; display: flex;
+  border-radius: 3px; overflow: hidden; outline: 1px solid rgba(255, 255, 255, 0.12);
+}
+#legend .track span { flex: none; height: 100%; }
+#legend .thumb {
+  position: absolute; top: 2px; width: 12px; height: 18px; margin-left: -6px; box-sizing: border-box;
+  background: #e6e9ee; border: 1px solid #0e1116; border-radius: 4px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.55); cursor: grab;
+}
+#legend .thumb:hover { background: #fff; }
+#legend .thumb:focus-visible { outline: 2px solid #9fd3ff; outline-offset: 1px; }
+#legend .scale { display: flex; justify-content: space-between; margin: 0 1px; color: #6b7480; font-size: 10px; }
 #legend .row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
 #legend .sw { width: 28px; flex: none; display: inline-flex; justify-content: center; }
 
@@ -220,10 +262,6 @@ canvas { display: block; }
 .signs { display: inline-flex; gap: 3px; vertical-align: middle; }
 #legend .name { flex: 1; }
 #legend .range { color: #9aa3ad; font-variant-numeric: tabular-nums; white-space: nowrap; }
-#legend input {
-  width: 44px; margin: 0 2px; padding: 1px 4px; font: inherit; text-align: right; color: #e6e9ee;
-  background: #0e1116; border: 1px solid #2f3746; border-radius: 4px;
-}
 #legend .degrees { margin-top: 8px; color: #9aa3ad; font-size: 11px; }
 #legend .reset {
   margin-top: 8px; padding: 3px 8px; font: 12px system-ui, sans-serif; color: #c9d0d8;
@@ -256,7 +294,7 @@ canvas { display: block; }
 }
 
 #toast {
-  position: fixed; left: 50%; bottom: 48px; z-index: 12; transform: translate(-50%, 8px);
+  position: fixed; left: 50%; bottom: 66px; z-index: 12; transform: translate(-50%, 8px);
   padding: 8px 14px; max-width: calc(100vw - 32px); text-align: center;
   font: 13px/1.4 system-ui, sans-serif; color: #e6e9ee;
   background: rgba(22, 26, 33, 0.95); border: 1px solid #2f3746; border-radius: 8px;
@@ -264,6 +302,35 @@ canvas { display: block; }
   opacity: 0; pointer-events: none; transition: opacity 0.2s, transform 0.2s;
 }
 #toast.visible { opacity: 1; transform: translate(-50%, 0); }
+
+/* Buttons for what you can do right now, bottom-center (see actionbar.js). */
+#action-bar {
+  position: fixed; left: 50%; bottom: 12px; z-index: 7; transform: translateX(-50%);
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; padding: 6px;
+  max-width: calc(100vw - 24px); box-sizing: border-box;
+  font: 13px/1 system-ui, sans-serif;
+  background: rgba(14, 17, 22, 0.92); border: 1px solid #262d39; border-radius: 10px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+#action-bar[hidden] { display: none; }
+#action-bar.stacked { left: 12px; transform: none; justify-content: flex-start; }
+#action-bar button {
+  display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px 0 12px;
+  font: inherit; color: #e6e9ee; white-space: nowrap; cursor: pointer;
+  background: #1c222c; border: 1px solid #2f3746; border-radius: 7px;
+}
+#action-bar button:hover:not(:disabled) { background: #263040; border-color: #3d4859; }
+#action-bar button.primary { background: #1b4a73; border-color: #2c6da3; }
+#action-bar button.primary:hover:not(:disabled) { background: #22598a; }
+#action-bar button.danger { color: #ff9e93; }
+#action-bar button:disabled { color: #5d6672; cursor: default; }
+#action-bar kbd {
+  padding: 1px 5px; font: 11px/1.4 ui-monospace, Consolas, monospace;
+  color: #9aa3ad; background: rgba(255, 255, 255, 0.06); border-radius: 3px;
+}
+#action-bar button:disabled kbd { color: #5d6672; }
+#action-bar button.active { background: rgba(159, 211, 255, 0.18); border-color: #9fd3ff; color: #fff; }
+#action-bar .separator { width: 1px; align-self: stretch; margin: 2px 2px; background: #2f3746; }
 
 #trail-panel {
   position: fixed; left: 12px; bottom: 12px; z-index: 6; width: min(340px, calc(100vw - 24px));
@@ -285,6 +352,11 @@ canvas { display: block; }
 }
 #trail-panel .breakdown { color: #9aa3ad; font-size: 12px; }
 #trail-panel .point { margin-top: 6px; }
+#trail-panel .uphill { margin-top: 6px; color: #ff8ee4; }
+#trail-panel .uphill i {
+  display: inline-block; width: 14px; height: 4px; margin-right: 7px; vertical-align: middle;
+  border-radius: 2px; background: #ff5cd6;
+}
 #trail-panel .hint { margin-top: 6px; color: #9aa3ad; font-size: 12px; }
 /* Rules like .bar set display, which would otherwise override the hidden attribute. */
 #trail-panel [hidden] { display: none; }

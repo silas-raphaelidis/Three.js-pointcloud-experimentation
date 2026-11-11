@@ -122,14 +122,16 @@ export class TrailNetwork extends EventTarget {
   }
 
   /**
-   * Remove one stop. A trail left with fewer than 2 stops is removed entirely.
-   * Used by the editor (Delete key and right-click menu).
+   * Remove one stop. A trail left with fewer than 2 stops is removed entirely,
+   * unless `keepShort` is set (a trail still being drawn).
+   * Used by the editor (Delete key, right-click menu, merging points, and
+   * undo while drawing).
    */
-  removePoint(trailId, index) {
+  removePoint(trailId, index, { keepShort = false } = {}) {
     const t = this.trails.get(trailId);
     const [stop] = t.points.splice(index, 1);
     this.#dropIfUnused(stop.node);
-    if (t.points.length < 2) {
+    if (t.points.length < 2 && !keepShort) {
       this.removeTrail(trailId);
     } else {
       this.#changed([trailId]);
