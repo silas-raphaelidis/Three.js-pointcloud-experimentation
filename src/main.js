@@ -19,6 +19,7 @@ import { IntroCard } from './intro.js';
 import { difficulty, trailStats } from './trails/stats.js';
 import { TrailPanel } from './trails/panel.js';
 import { ActionBar } from './trails/actionbar.js';
+import { CollapseToggle } from './collapse.js';
 import { GroundMesh } from './ground.js';
 import { withRetry } from './retry.js';
 import { LoadingScreen } from './loading.js';
@@ -321,12 +322,11 @@ const other = new THREE.Color(0x8a8f99);
 // ---------- HUD ----------
 const hud = document.createElement('div');
 hud.id = 'hud';
+// A title row with the collapse arrow; updateHud fills in the body.
+hud.innerHTML = `<div class="head"><strong>${decodeURIComponent(FILE.split('/').pop())}</strong></div><div class="body"></div>`;
+const hudBody = hud.querySelector('.body');
+hud.querySelector('.head').appendChild(new CollapseToggle(hud, { name: 'info', label: 'info box' }).button);
 document.body.appendChild(hud);
-// The small trail-color key opens (or closes) the difficulty slopes, without
-// switching the mountain to the difficulty colors.
-hud.addEventListener('click', (e) => {
-  if (e.target.closest('.key')) legend.toggleSettings();
-});
 let loadedPoints = 0;
 let totalPoints = 0;
 let loadStatus = '';
@@ -337,8 +337,7 @@ let cursorInfo = '';
  */
 function updateHud(extra) {
   if (extra !== undefined) loadStatus = extra;
-  hud.innerHTML = `
-    <strong>${decodeURIComponent(FILE.split('/').pop())}</strong><br>
+  hudBody.innerHTML = `
     ${(loadedPoints / 1e6).toFixed(1)}M / ${(totalPoints / 1e6).toFixed(1)}M points ${loadStatus}<br>
     ${cursorInfo ? `<span class="cursor">${cursorInfo}</span><br>` : ''}
     <span class="keys">Drag to orbit · Shift-drag to pan · wheel to zoom · right-click for trail options</span>
@@ -348,8 +347,7 @@ function updateHud(extra) {
 /**
  * A small key to the trail line colors, under the info box. Shown while the
  * View menu's Legend option is on and trails are showing, except in the slope
- * difficulty view, whose own legend explains the colors. Clicking it opens
- * the difficulty slopes on their own (see the click handler on #hud). Used by updateHud.
+ * difficulty view, whose own legend explains the colors. Used by updateHud.
  */
 function colorKeyHtml() {
   if (!colorKeyOn || !trailsShown || uniforms.uColorMode.value === COLOR.difficulty) return '';
@@ -357,8 +355,7 @@ function colorKeyHtml() {
   const difficulties = RATINGS.map((_, i) => `<span>${ratingIcon(i)}${ratingLabel(i)}</span>`).join('');
   // Dashed, like lift lines on the map.
   const lift = `<span><i style="background:repeating-linear-gradient(90deg, ${hex(TRAIL_COLORS.lift)} 0 5px, transparent 5px 8px)"></i>Lift</span>`;
-  const adjust = `<span class="adjust">${legend.settingsOpen ? 'Close slopes ×' : 'Adjust slopes ›'}</span>`;
-  return `<div class="key" title="Adjust the slopes each difficulty starts at">${difficulties}${lift}${adjust}</div>`;
+  return `<div class="key">${difficulties}${lift}</div>`;
 }
 
 // ---------- Terrain + cursor ----------
@@ -410,7 +407,7 @@ function updateCursor() {
   terrain.normalAt(hit.x, hit.y, normal);
   cursor.position.copy(hit).addScaledVector(normal, 0.2);
   cursor.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
-  cursor.visible = true;
+  cursor.visible = !document.body.classList.contains('ui-hidden');
 
   // The readout (elevation, slope and its difficulty) only shows in the
   // difficulty view, using the same smoothed slope and thresholds, so it
@@ -572,6 +569,13 @@ window.trails = {
   get editor() { return editor; },
   // Height-above-ground colors, kept for debugging now they're out of the View menu.
   heightView: (on = true) => setColorMode(on ? COLOR.height : COLOR.natural),
+  // Hide every panel, menu and the cursor ring, leaving just the 3D view (for
+  // recording video); trails.hideUI(false) brings them back. Console only.
+  hideUI(on = true) {
+    document.body.classList.toggle('ui-hidden', on);
+    if (on) cursor.visible = false;
+    else pointerDirty = true; // put the cursor ring back where the mouse is
+  },
 };
 
 
@@ -966,7 +970,6 @@ const toggle = (opt) => opt.set(!opt.get());
 // ground is only reachable from the console (trails.heightView()), for debugging.
 const COLOR = { natural: 0, height: 1, difficulty: 2 };
 const legend = new DifficultyLegend();
-legend.onToggle = () => updateHud(); // the key says "Adjust" or "Close"
 /** Current color mode (a COLOR value). */
 const colorMode = () => uniforms.uColorMode.value;
 /**
@@ -975,7 +978,7 @@ const colorMode = () => uniforms.uColorMode.value;
  */
 function setColorMode(mode) {
   uniforms.uColorMode.value = mode;
-  legend.show(mode === COLOR.difficulty);
+  legend.setView(mode === COLOR.difficulty);
   pointerDirty = true; // the cursor readout only shows in the difficulty view
   updateHud(); // the small color key hides while the full legend is up
 }

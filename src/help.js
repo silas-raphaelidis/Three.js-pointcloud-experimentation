@@ -59,7 +59,8 @@ const SECTIONS = [
   section('View', [
     row('Vegetation', key('V')),
     row('Color by slope difficulty', key('D')),
-    row('Adjust the difficulty slopes', 'Click the trail color key'),
+    row('Adjust the difficulty slopes', 'Slope difficulty panel, top right'),
+    row('Collapse or expand a panel', 'Its arrow'),
     row('Trail and lift lines', key('T')),
     row('Point size', `${key('[')} ${key(']')}`),
     row('FPS counter', key('P')),

@@ -1,4 +1,5 @@
 import { RATINGS, ratingIcon, ratingLabel } from '../difficulty.js';
+import { CollapseToggle } from '../collapse.js';
 
 /**
  * Bottom-left panel for the selected trail (or the one being drawn):
@@ -20,8 +21,10 @@ export class TrailPanel {
     this.el.id = 'trail-panel';
     this.el.hidden = true;
     this.el.innerHTML = `
-      <input class="name" type="text" spellcheck="false" maxlength="40" aria-label="Trail name">
-      <div class="drawing"></div>
+      <div class="head">
+        <input class="name" type="text" spellcheck="false" maxlength="40" aria-label="Trail name">
+        <div class="drawing"></div>
+      </div>
       <div class="stats"></div>
       <div class="bar"></div>
       <div class="breakdown"></div>
@@ -29,6 +32,9 @@ export class TrailPanel {
       <div class="point"></div>
       <div class="hint"></div>`;
     document.body.appendChild(this.el);
+    // The arrow collapses it to the trail's name.
+    this.toggle = new CollapseToggle(this.el, { name: 'trail', label: 'trail details' });
+    this.el.querySelector('.head').appendChild(this.toggle.button);
 
     this.name = this.el.querySelector('.name');
     // Apply a changed name, or restore the old one if the field is empty.

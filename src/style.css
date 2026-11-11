@@ -1,4 +1,22 @@
 html, body { margin: 0; height: 100%; overflow: hidden; background: #111; }
+
+/* The arrow that collapses a box to its title row (see collapse.js). */
+.collapse {
+  flex: none; width: 22px; height: 22px; padding: 0; display: inline-grid; place-items: center;
+  color: #9aa3ad; background: none; border: none; border-radius: 4px; cursor: pointer;
+}
+.collapse:hover { color: #e6e9ee; background: rgba(255, 255, 255, 0.08); }
+.collapse:focus-visible { outline: 2px solid #9fd3ff; outline-offset: 1px; }
+.collapse::before {
+  content: ''; width: 6px; height: 6px; margin-top: -3px;
+  border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+  transform: rotate(45deg); transition: transform 0.15s;
+}
+.collapsed .collapse::before { margin-top: 0; margin-left: -3px; transform: rotate(-45deg); }
+
+/* trails.hideUI() in the console: nothing but the 3D view, for recording. */
+body.ui-hidden :is(#hud, #menubar, #trail-lock, #fps, #toast, #action-bar, #trail-panel, #legend,
+  .context-menu, #mountain-dialog, #help, #intro) { display: none !important; }
 canvas { display: block; }
 
 #hud {
@@ -6,6 +24,9 @@ canvas { display: block; }
   font: 13px/1.5 system-ui, sans-serif; color: #e6e9ee;
   background: rgba(14, 17, 22, 0.75); border-radius: 8px; pointer-events: none;
 }
+#hud .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+#hud .collapse { pointer-events: auto; margin-right: -4px; }
+#hud.collapsed .body { display: none; }
 #hud .keys { color: #9aa3ad; font-size: 12px; }
 #hud .key {
   display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: 6px; padding-top: 6px;
@@ -13,10 +34,6 @@ canvas { display: block; }
 }
 #hud .key span { display: inline-flex; align-items: center; gap: 5px; }
 #hud .key i { width: 14px; height: 4px; border-radius: 2px; }
-/* The key opens the difficulty slopes (the rest of the info box lets clicks through). */
-#hud .key { pointer-events: auto; cursor: pointer; margin: 6px -4px 0; padding: 6px 4px 2px; border-radius: 0 0 5px 5px; }
-#hud .key:hover { background: rgba(255, 255, 255, 0.06); }
-#hud .key .adjust { color: #9fd3ff; }
 #hud .cursor { font-variant-numeric: tabular-nums; }
 #hud .editor {
   margin: 4px 0; padding: 6px 8px; border-left: 2px solid #9fd3ff;
@@ -223,16 +240,15 @@ canvas { display: block; }
   background: rgba(14, 17, 22, 0.85); border: 1px solid #262d39; border-radius: 8px;
 }
 #legend .title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-weight: 600; }
-#legend .close {
-  display: none; width: 22px; height: 22px; padding: 0; font-size: 16px; line-height: 1; color: #9aa3ad;
-  background: none; border: none; border-radius: 4px; cursor: pointer;
-}
-#legend .close:hover { color: #e6e9ee; background: rgba(255, 255, 255, 0.08); }
-#legend .note { display: none; margin: -4px 0 8px; color: #9aa3ad; font-size: 11px; }
-/* Opened on its own from the small key: closable, and no map-only smoothing. */
-#legend.settings .close { display: block; }
-#legend.settings .note { display: block; }
-#legend.settings .smoothing { display: none; }
+#legend .title .collapse { margin: -2px -4px -2px 0; }
+#legend .note { margin: -4px 0 8px; color: #9aa3ad; font-size: 11px; }
+/* Smoothing only changes the map colors, so it's only there in the slope view;
+   the note says how to get there. */
+#legend:not(.view) .smoothing, #legend.view .note { display: none; }
+/* Collapsed: just the title, as narrow as it fits. */
+#legend.collapsed { width: auto; }
+#legend.collapsed > :not(.title) { display: none; }
+#legend.collapsed .title { margin-bottom: 0; gap: 10px; }
 /* One slider, a handle on each boundary between the four difficulties. */
 #legend .slider { position: relative; height: 22px; margin: 10px 7px 2px; cursor: pointer; touch-action: none; }
 #legend .track {
@@ -338,8 +354,12 @@ canvas { display: block; }
   background: rgba(14, 17, 22, 0.88); border: 1px solid #262d39; border-radius: 8px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
 }
+#trail-panel .head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+#trail-panel .head .drawing { flex: 1; padding-left: 6px; }
+#trail-panel.collapsed .head { margin-bottom: 0; }
+#trail-panel.collapsed > :not(.head) { display: none !important; }
 #trail-panel .name {
-  width: 100%; box-sizing: border-box; margin: 0 0 6px; padding: 3px 6px;
+  flex: 1; min-width: 0; box-sizing: border-box; margin: 0; padding: 3px 6px;
   font: 600 15px/1.3 system-ui, sans-serif; color: #e6e9ee;
   background: transparent; border: 1px solid transparent; border-radius: 5px;
 }

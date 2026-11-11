@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { CollapseToggle } from './collapse.js';
 
 /**
  * Trail difficulty ratings by slope: one shared set of thresholds used by
@@ -217,10 +218,11 @@ const toDegrees = (slope) => Math.round(THREE.MathUtils.radToDeg(Math.atan(slope
 const SLIDER_MAX = 0.8;
 
 /**
- * Legend panel (right side): the four difficulties, a slider with a handle
- * on each boundary between them, and the map's smoothing. Shown with the
- * slope difficulty view, or on its own (opened from the small trail-color
- * key) to adjust how trails are rated without recoloring the mountain.
+ * Difficulty panel (top right), always shown: the four difficulties and a
+ * slider with a handle on each boundary between them, which sets how every
+ * trail is rated. In the slope difficulty view it also has the map's
+ * smoothing. Its arrow collapses it to its title: outside the view it
+ * starts collapsed and remembers your choice; the view opens it.
  */
 export class DifficultyLegend {
   /**
@@ -229,42 +231,34 @@ export class DifficultyLegend {
    */
   constructor() {
     this.viewOn = false;   // the slope difficulty view is showing
-    this.settings = false; // opened on its own from the small key
     this.dragging = null;  // index of the boundary being dragged
-    this.onToggle = null;  // called when opened or closed on its own (main.js updates the key)
     this.el = document.createElement('div');
     this.el.id = 'legend';
-    this.el.hidden = true;
     document.body.appendChild(this.el);
     this.#render();
+    // Collapsed or not is kept separately in and out of the view: outside it's
+    // remembered between visits; the view always opens expanded.
+    this.toggle = new CollapseToggle(this.el, {
+      name: 'difficulty', label: 'slope difficulty', collapsed: true,
+      onChange: (collapsed) => { if (this.viewOn) this.collapsedInView = collapsed; else this.collapsedOutside = collapsed; },
+    });
+    this.collapsedOutside = this.toggle.collapsed;
+    this.collapsedInView = false;
+    this.el.querySelector('.title').appendChild(this.toggle.button);
     onThresholdsChange(() => this.#sync());
     onSmoothingChange(() => this.#sync());
   }
 
   /**
-   * Show or hide the legend with the difficulty view. Turning the view off
-   * also closes it if it was opened on its own. Used by setColorMode in main.js.
+   * Switch between the slope difficulty view (expanded, with smoothing) and
+   * the other views. Used by setColorMode in main.js.
    */
-  show(on) {
+  setView(on) {
     this.viewOn = on;
-    if (!on) this.settings = false;
-    this.#apply();
-  }
-
-  /** Is it showing on its own (not with the difficulty view)? */
-  get settingsOpen() { return this.settings && !this.viewOn; }
-
-  /** Open or close it on its own. Used by clicking the small trail-color key (main.js) and its ×. */
-  toggleSettings() {
-    this.settings = !this.settingsOpen;
-    this.#apply();
-    this.onToggle?.();
-  }
-
-  /** Show it for the view or on its own; on its own it has a close button and no smoothing. */
-  #apply() {
-    this.el.hidden = !(this.viewOn || this.settings);
-    this.el.classList.toggle('settings', this.settingsOpen);
+    if (on) this.collapsedInView = false;
+    this.el.classList.toggle('view', on);
+    // Only the outside-the-view state is remembered between visits.
+    this.toggle.set(on ? this.collapsedInView : this.collapsedOutside, { save: false });
   }
 
   /** Build the legend's HTML and wire up its controls. Runs once, from the constructor. */
@@ -273,7 +267,7 @@ export class DifficultyLegend {
       `<span class="name">${ratingLabel(i)}</span><span class="range" data-r="${i}"></span></div>`;
     const between = ['Beginner to intermediate', 'Intermediate to advanced', 'Advanced to expert'];
     this.el.innerHTML = `
-      <div class="title"><span>Slope difficulty</span><button class="close" aria-label="Close">×</button></div>
+      <div class="title"><span>Slope difficulty</span></div>
       <div class="note">Trails are rated by these slopes · press D to color the mountain by them</div>
       <div class="rows">${[0, 1, 2, 3].map(row).join('')}</div>
       <div class="slider">
@@ -292,7 +286,6 @@ export class DifficultyLegend {
 
     const smooth = this.el.querySelector('.smoothing input');
     smooth.addEventListener('input', () => setSmoothing(Number(smooth.value)));
-    this.el.querySelector('.close').addEventListener('click', () => this.toggleSettings());
     this.el.querySelector('.reset').addEventListener('click', () => {
       resetThresholds();
       setSmoothing(SMOOTHING.default);
