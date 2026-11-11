@@ -32,6 +32,18 @@ export function ratingLabel(index) {
   return name[0].toUpperCase() + name.slice(1);
 }
 
+/**
+ * HTML for a rating's trail-sign shape in its color: a circle (beginner),
+ * square (intermediate), diamond (advanced) or two diamonds (expert), as on
+ * real trail signs, so the levels can be told apart without relying on
+ * color. Styled by .sign in style.css. Used wherever a rating is labeled.
+ */
+export function ratingIcon(index) {
+  const shape = (cls) => `<span class="sign ${cls}" style="--sign:${RATINGS[index].color}"></span>`;
+  if (index === 3) return `<span class="signs">${shape('diamond dark')}${shape('diamond dark')}</span>`;
+  return shape(['circle', 'square', 'diamond'][index]);
+}
+
 const listeners = new Set();
 let thresholds = load();
 
@@ -230,10 +242,10 @@ export class DifficultyLegend {
     this.el.innerHTML = `
       <div class="title">Slope difficulty</div>
       <div class="rows">
-        <div class="row"><span class="sw" style="background:${RATINGS[0].color}"></span><span class="name">${ratingLabel(0)}</span><span class="range">below ${input(0)}</span></div>
-        <div class="row"><span class="sw" style="background:${RATINGS[1].color}"></span><span class="name">${ratingLabel(1)}</span><span class="range">to ${input(1)}</span></div>
-        <div class="row"><span class="sw" style="background:${RATINGS[2].color}"></span><span class="name">${ratingLabel(2)}</span><span class="range">to ${input(2)}</span></div>
-        <div class="row"><span class="sw dbl" style="background:${RATINGS[3].color}"></span><span class="name">${ratingLabel(3)}</span><span class="range">above</span></div>
+        <div class="row"><span class="sw">${ratingIcon(0)}</span><span class="name">${ratingLabel(0)}</span><span class="range">below ${input(0)}</span></div>
+        <div class="row"><span class="sw">${ratingIcon(1)}</span><span class="name">${ratingLabel(1)}</span><span class="range">to ${input(1)}</span></div>
+        <div class="row"><span class="sw">${ratingIcon(2)}</span><span class="name">${ratingLabel(2)}</span><span class="range">to ${input(2)}</span></div>
+        <div class="row"><span class="sw">${ratingIcon(3)}</span><span class="name">${ratingLabel(3)}</span><span class="range">above</span></div>
       </div>
       <div class="degrees"></div>
       <div class="smoothing">

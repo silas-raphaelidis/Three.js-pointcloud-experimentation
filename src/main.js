@@ -15,6 +15,7 @@ import { MountainGenerator } from './mountain/generator.js';
 import { MountainDialog } from './mountain/dialog.js';
 import { showToast } from './toast.js';
 import { HelpPanel } from './help.js';
+import { IntroCard } from './intro.js';
 import { difficulty, trailStats } from './trails/stats.js';
 import { TrailPanel } from './trails/panel.js';
 import { GroundMesh } from './ground.js';
@@ -32,6 +33,7 @@ import {
   DifficultyLegend,
   RATINGS,
   ratingLabel,
+  ratingIcon,
 } from './difficulty.js';
 
 // Which file to load: ?file=ascutney-1.4m.copc.laz to compare thinning levels.
@@ -345,10 +347,9 @@ function updateHud(extra) {
 function colorKeyHtml() {
   if (!colorKeyOn || !trailsShown || uniforms.uColorMode.value === COLOR.difficulty) return '';
   const hex = (n) => `#${n.toString(16).padStart(6, '0')}`;
-  const item = (color, label, dark = false) =>
-    `<span><i style="background:${color}"${dark ? ' class="dark"' : ''}></i>${label}</span>`;
-  return `<div class="key">${RATINGS.map((r, i) => item(r.color, ratingLabel(i), i === 3)).join('')}` +
-    `${item(hex(TRAIL_COLORS.lift), 'Lift')}</div>`;
+  const difficulties = RATINGS.map((_, i) => `<span>${ratingIcon(i)}${ratingLabel(i)}</span>`).join('');
+  const lift = `<span><i style="background:${hex(TRAIL_COLORS.lift)}"></i>Lift</span>`;
+  return `<div class="key">${difficulties}${lift}</div>`;
 }
 
 // ---------- Terrain + cursor ----------
@@ -413,7 +414,7 @@ function updateCursor() {
     cursorInfo =
       `${elev.toFixed(0)} m (${(elev * 3.28084).toFixed(0)} ft) · ` +
       `slope ${(slope * 100).toFixed(0)}% (${THREE.MathUtils.radToDeg(Math.atan(slope)).toFixed(0)}°) · ` +
-      `<span style="color:${rating.color}">${rating.name}</span>`;
+      `${ratingIcon(rating.index)} <span style="color:${rating.color}">${rating.name}</span>`;
   }
   updateHud();
 }
@@ -484,7 +485,7 @@ let generatingMountain = false;
 
 /**
  * Replace the network with a generated mountain, showing progress in the
- * toast and the seed when done. Used by the Generate mountain dialog.
+ * toast and the seed when done. Used by the Generate ski resort dialog.
  * @param {{ bases:number, lifts:number, runs:number, seed:number }} settings
  */
 async function generateMountain(settings) {
@@ -496,12 +497,12 @@ async function generateMountain(settings) {
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
   showToast('Placing lifts…', 60000);
   const result = await mountainGenerator.generate(settings, ({ runs }) =>
-    showToast(`Building the mountain · ${plural(runs, 'run')} so far · Esc to cancel`, 60000));
+    showToast(`Building the ski resort · ${plural(runs, 'run')} so far · Esc to cancel`, 60000));
   generatingMountain = false;
   mountainButton.disabled = false;
-  mountainButton.textContent = 'Generate mountain';
-  if (!result) showToast('Mountain generation failed.', 4000);
-  else if (result.stopped) showToast('Mountain generation stopped.', 4000);
+  mountainButton.textContent = 'Generate ski resort';
+  if (!result) showToast('Ski resort generation failed.', 4000);
+  else if (result.stopped) showToast('Ski resort generation stopped.', 4000);
   else {
     // Say so when the terrain only fit fewer lifts or bases than asked for.
     const short = (got, asked) => (got < asked ? ` (of ${asked} asked)` : '');
@@ -718,6 +719,7 @@ async function load() {
   ready = true;
   await loading.hide();
   loadSavedTrails();
+  intro.showIfFirstVisit(totalPoints);
 }
 
 load().catch((err) => {
@@ -1000,13 +1002,15 @@ menuBar.addMenu('View', [
 menuBar.addButton({ label: 'Controls', shortcut: '?', action: () => help.toggle() });
 // Opens the panel for generating a whole mountain; while one is being built it reads "Generating…".
 const mountainButton = menuBar.addButton({
-  label: 'Generate mountain',
+  label: 'Generate ski resort',
   action: () => {
     if (editor?.locked) explainLocked();
     else if (mountainGenerator) mountainDialog.toggle();
   },
 });
 const mountainDialog = new MountainDialog({ anchor: mountainButton, onGenerate: generateMountain });
+// First-visit welcome; its buttons open the panels above.
+const intro = new IntroCard({ onGenerate: () => mountainDialog.open(), onControls: () => help.open() });
 // Removes every trail and lift; one Ctrl+Z brings them back.
 menuBar.addButton({
   label: 'Clear mountain',

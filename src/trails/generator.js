@@ -61,10 +61,13 @@ export class TrailGenerator {
    * @param {{node?:string, trail?:string, x?:number, y?:number}} to
    * @param {number} target  rating index, 0 green .. 3 double black
    * @param {number} width   width of the new trail, meters
-   * @param {{ coarseness?: number }} [opts]  scales how loosely the route is
-   *   simplified into control points: 2 gives about half as many (mountain generation)
+   * @param {{ coarseness?: number, via?: {x:number, y:number} }} [opts]
+   *   coarseness: scales how loosely the route is simplified into control
+   *   points (2 gives about half as many, for mountain generation).
+   *   via: a spot the route must pass through on its way down (ignored if
+   *   it isn't between the two ends in height).
    */
-  async generate(from, to, target, width, { coarseness = 1 } = {}) {
+  async generate(from, to, target, width, { coarseness = 1, via = null } = {}) {
     this.#startWorker();
     const a = this.#position(from), b = this.#position(to);
     const aHigher = this.terrain.trailHeightAt(a.x, a.y) >= this.terrain.trailHeightAt(b.x, b.y);
@@ -72,18 +75,26 @@ export class TrailGenerator {
     const top = aHigher ? a : b, bottom = aHigher ? b : a;
     const { lo, hi } = this.#band(target);
     const avoid = this.#avoidMask();
-    const maxLength = this.#maxLength(top, bottom, hi);
+    // A via point splits the route into two legs, each searched on its own.
+    const h = (p) => this.terrain.trailHeightAt(p.x, p.y);
+    const useVia = via && h(via) < h(top) && h(via) > h(bottom);
+    const legs = useVia ? [[top, via], [via, bottom]] : [[top, bottom]];
 
     let best = null;
     for (const attempt of ATTEMPTS) {
-      const route = await this.#request({
-        start: top, goal: bottom, lo, avoid, maxLength,
-        hi: hi * attempt.hiScale,
-        belowWeight: attempt.belowWeight,
-      });
-      if (!route) break; // cliffs or the length cap: stricter costs can't help
+      let path = [];
+      for (const [start, goal] of legs) {
+        const route = await this.#request({
+          start, goal, lo, avoid, maxLength: this.#maxLength(start, goal, hi),
+          hi: hi * attempt.hiScale,
+          belowWeight: attempt.belowWeight,
+        });
+        if (!route) { path = null; break; }
+        path = path.length ? path.concat(route.path.slice(1)) : route.path;
+      }
+      if (!path) break; // cliffs or the length cap: stricter costs can't help
 
-      const middle = simplifyPath(route.path, attempt.tolerance * coarseness).slice(1, -1);
+      const middle = simplifyPath(path, attempt.tolerance * coarseness).slice(1, -1);
       const ctrl = [top, ...middle, bottom].map((p) => ({ x: p.x, y: p.y, width }));
       const rating = trailStats(sampleSpline(ctrl), this.terrain)?.rating.index ?? 0;
       const miss = Math.abs(rating - target);

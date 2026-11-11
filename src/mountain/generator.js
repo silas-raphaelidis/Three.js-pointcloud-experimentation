@@ -63,7 +63,7 @@ export class MountainGenerator {
       onProgress({ runs: built, pass: run.pass });
       // Coarser than a hand-generated trail: a whole mountain of points is a lot to look at.
       const route = await this.trailGenerator.generate(
-        terminal(run.from), terminal(run.to), run.target, run.width, { coarseness: 2 });
+        terminal(run.from), terminal(run.to), run.target, run.width, { coarseness: 2, via: run.via });
       if (!this.editor.isBuilding(token)) break;
       const answer = await this.#request({
         type: 'tried', run, rating: route?.rating,

@@ -11,7 +11,7 @@ import { rate, RATINGS, CRUX_MIN_LENGTH } from '../difficulty.js';
  */
 export function difficulty(slope) {
   const r = rate(slope);
-  return { name: r.name, color: r.text };
+  return { name: r.name, color: r.text, index: r.index };
 }
 
 /**

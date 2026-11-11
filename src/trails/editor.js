@@ -3,7 +3,7 @@ import { trailStats } from './stats.js';
 import { ContextMenu } from './menu.js';
 import { sampleSpline } from './spline.js';
 import { pickRunName, pickLiftName } from './names.js';
-import { RATINGS, ratingLabel } from '../difficulty.js';
+import { RATINGS, ratingLabel, ratingIcon, getThresholds } from '../difficulty.js';
 import { showToast } from '../toast.js';
 
 const PICK_PX = 11;         // screen radius for grabbing points and handles
@@ -69,6 +69,7 @@ export class TrailEditor {
     this.grabbed = false;      // we took this press away from OrbitControls
     this.rightPress = null;    // pending right-click
     this.menu = new ContextMenu();
+    this.ratings = new WeakMap(); // sampled trail -> { thresholds, index }, see #ratingOf
 
     this.raycaster = new THREE.Raycaster();
     this.ndc = new THREE.Vector2();
@@ -198,14 +199,60 @@ export class TrailEditor {
       junction: this.network.isJunction(t.points[sel.index].node),
       width: t.points[sel.index].width,
     };
+    const lift = this.network.isLift(t.id);
     return {
       kind: 'trail',
-      lift: this.network.isLift(t.id),
+      lift,
       trailId: t.id,
       name: t.name,
       stats: geo ? trailStats(geo.samples, this.terrain) : null,
+      serves: lift ? this.#liftServes(t) : null,
       point,
     };
+  }
+
+  /**
+   * Rating indexes (easiest first) of every run you can ski from a lift's
+   * top without riding another lift: down each run through its top, then
+   * on through any junction further down, as far as the runs go. Like the
+   * "this lift serves" line on a real lift sign. Used by panelState.
+   */
+  #liftServes(lift) {
+    const height = (nodeId) => {
+      const n = this.network.node(nodeId);
+      return this.terrain.trailHeightAt(n.x, n.y);
+    };
+    const ends = lift.points.map((p) => p.node);
+    const top = height(ends[0]) >= height(ends[1]) ? ends[0] : ends[1];
+    const seen = new Set([top]), skied = new Set(), queue = [top];
+    while (queue.length) {
+      const node = queue.shift();
+      for (const id of this.network.trailsUsingNode(node)) {
+        if (this.network.isLift(id)) continue;
+        const stops = this.network.trail(id).points.map((p) => p.node);
+        // Which way the run goes downhill, and the stops below this one.
+        const forward = height(stops[0]) >= height(stops[stops.length - 1]);
+        const i = stops.indexOf(node);
+        const below = forward ? stops.slice(i + 1) : stops.slice(0, i).reverse();
+        if (!below.length) continue;
+        skied.add(id);
+        for (const next of below) if (!seen.has(next)) { seen.add(next); queue.push(next); }
+      }
+    }
+    const indexes = new Set([...skied].map((id) => this.#ratingOf(id)).filter((i) => i != null));
+    return [...indexes].sort((a, b) => a - b);
+  }
+
+  /** A trail's rating index, cached until it changes or the thresholds do. Used by #liftServes. */
+  #ratingOf(trailId) {
+    const geo = this.geometry.get(trailId);
+    if (!geo) return null;
+    const thresholds = getThresholds().join();
+    const cached = this.ratings.get(geo);
+    if (cached?.thresholds === thresholds) return cached.index;
+    const index = trailStats(geo.samples, this.terrain)?.rating.index ?? null;
+    this.ratings.set(geo, { thresholds, index });
+    return index;
   }
 
   /** Rename a trail (undoable). Used by the name field in the trail panel. */
@@ -712,6 +759,7 @@ export class TrailEditor {
       { type: 'header', label: 'Generate trail from here' },
       ...RATINGS.map((_, i) => ({
         label: ratingLabel(i),
+        icon: ratingIcon(i),
         action: edit(() => this.#beginGenerate(from, i)),
       })),
     ]);

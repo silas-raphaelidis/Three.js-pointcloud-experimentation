@@ -13,7 +13,6 @@ canvas { display: block; }
 }
 #hud .key span { display: inline-flex; align-items: center; gap: 5px; }
 #hud .key i { width: 14px; height: 4px; border-radius: 2px; }
-#hud .key i.dark { box-shadow: 0 0 0 1px #5d6672; }
 #hud .cursor { font-variant-numeric: tabular-nums; }
 #hud .editor {
   margin: 4px 0; padding: 6px 8px; border-left: 2px solid #9fd3ff;
@@ -66,6 +65,32 @@ canvas { display: block; }
   background: rgba(255, 255, 255, 0.07); border: 1px solid #3a4352; border-bottom-width: 2px; border-radius: 4px;
 }
 #help .join { margin: 0 4px; color: #6b7480; font-size: 11px; }
+#intro {
+  position: fixed; inset: 0; z-index: 31; display: grid; place-items: center; padding: 16px;
+  background: rgba(6, 8, 11, 0.3);
+}
+#intro[hidden] { display: none; }
+#intro .card {
+  position: relative; width: min(440px, 100%); box-sizing: border-box; padding: 22px 24px 20px;
+  font: 14px/1.5 system-ui, sans-serif; color: #e6e9ee;
+  background: #12161c; border: 1px solid #2a3140; border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+}
+#intro h2 { margin: 0 0 8px; font-size: 19px; }
+#intro p { margin: 0 0 10px; color: #c9d0d8; }
+#intro .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+#intro .actions button {
+  height: 32px; padding: 0 14px; font: inherit; font-size: 13px; color: #e6e9ee; cursor: pointer;
+  background: rgba(255, 255, 255, 0.06); border: 1px solid #2f3746; border-radius: 6px;
+}
+#intro .actions button:hover { background: rgba(159, 211, 255, 0.12); }
+#intro .actions .primary { color: #0e1116; background: #9fd3ff; border-color: #9fd3ff; font-weight: 600; }
+#intro .actions .primary:hover { background: #b8deff; }
+#intro .close {
+  position: absolute; top: 10px; right: 10px; width: 28px; height: 28px; cursor: pointer;
+  font: 18px/1 system-ui, sans-serif; color: #9aa3ad; background: transparent; border: 0; border-radius: 6px;
+}
+#intro .close:hover { color: #e6e9ee; background: rgba(255, 255, 255, 0.08); }
 .context-menu {
   position: fixed; z-index: 10; min-width: 200px; padding: 4px;
   font: 13px/1.4 system-ui, sans-serif; color: #e6e9ee;
@@ -74,6 +99,7 @@ canvas { display: block; }
 }
 .context-menu .header { padding: 5px 10px 3px; color: #9aa3ad; font-size: 12px; }
 .context-menu .item { padding: 6px 10px; border-radius: 5px; cursor: pointer; }
+.context-menu .item .icon { display: inline-flex; justify-content: center; width: 28px; margin-right: 6px; }
 .context-menu .item:hover { background: rgba(159, 211, 255, 0.14); }
 .context-menu .item.danger { color: #ff8a80; }
 .context-menu .sep { height: 1px; margin: 4px 6px; background: #2f3746; }
@@ -181,8 +207,17 @@ canvas { display: block; }
 }
 #legend .title { margin-bottom: 8px; font-weight: 600; }
 #legend .row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
-#legend .sw { width: 14px; height: 14px; border-radius: 3px; flex: none; }
-#legend .sw.dbl { box-shadow: inset 0 0 0 1px #5d6672; }
+#legend .sw { width: 28px; flex: none; display: inline-flex; justify-content: center; }
+
+/* Trail-sign shapes for ratings (see ratingIcon in difficulty.js). */
+.sign {
+  display: inline-block; width: 9px; height: 9px; flex: none; vertical-align: middle;
+  background: var(--sign);
+}
+.sign.circle { border-radius: 50%; width: 10px; height: 10px; }
+.sign.diamond { transform: rotate(45deg) scale(0.9); }
+.sign.dark { box-shadow: 0 0 0 1px #8a93a0; }
+.signs { display: inline-flex; gap: 3px; vertical-align: middle; }
 #legend .name { flex: 1; }
 #legend .range { color: #9aa3ad; font-variant-numeric: tabular-nums; white-space: nowrap; }
 #legend input {
@@ -253,3 +288,4 @@ canvas { display: block; }
 #trail-panel .hint { margin-top: 6px; color: #9aa3ad; font-size: 12px; }
 /* Rules like .bar set display, which would otherwise override the hidden attribute. */
 #trail-panel [hidden] { display: none; }
+#trail-panel .serves { margin-left: 10px; white-space: nowrap; }

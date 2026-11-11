@@ -6,7 +6,7 @@ const SAVE_KEY = 'ascutney-mountain-settings';
 const MAX_SEED = 999999;
 
 /**
- * The Generate mountain panel, opened from its button on the top bar: how
+ * The Generate ski resort panel, opened from its button on the top bar: how
  * many bases, lifts and runs to aim for, and the seed. A new random seed is
  * filled in every time it opens, so each generation differs; typing a seed
  * repeats a mountain. The counts are remembered between visits.
@@ -25,7 +25,7 @@ export class MountainDialog {
     this.el.id = 'mountain-dialog';
     this.el.hidden = true;
     this.el.innerHTML = `
-      <div class="title">Generate mountain</div>
+      <div class="title">Generate ski resort</div>
       ${stepper('bases', 'Bases')}
       ${stepper('lifts', 'Lifts')}
       ${stepper('runs', 'Runs')}

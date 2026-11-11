@@ -1,4 +1,4 @@
-import { RATINGS } from '../difficulty.js';
+import { RATINGS, ratingIcon, ratingLabel } from '../difficulty.js';
 
 /**
  * Bottom-left panel for the selected trail (or the one being drawn):
@@ -50,6 +50,7 @@ export class TrailPanel {
    * @param {null | {kind:'drawing', lift:boolean, points:number}
    *   | {kind:'generate', busy:boolean, rating:string}
    *   | {kind:'trail', lift:boolean, trailId:string, name:string, stats:object|null,
+   *      serves: number[]|null (a lift's: ratings of the runs off its top),
    *      point: null | {index:number, count:number, junction:boolean, width:number}}} state
    */
   render(state) {
@@ -93,14 +94,19 @@ export class TrailPanel {
 
     const st = state.stats;
     q('.stats').hidden = !st;
-    // Lifts show their size only: they have no difficulty.
-    for (const s of ['.bar', '.breakdown']) q(s).hidden = !st || state.lift;
+    // Lifts have no difficulty of their own: they show their size and the
+    // difficulties of the runs off their top, like a lift sign.
+    q('.bar').hidden = !st || state.lift;
+    q('.breakdown').hidden = !st || (state.lift && !state.serves?.length);
     if (st && state.lift) {
       q('.stats').textContent = `${st.length.toFixed(0)} m long · ${st.vertical.toFixed(0)} m vertical · lift`;
+      q('.breakdown').innerHTML = 'Serves ' + (state.serves ?? [])
+        .map((i) => `<span class="serves">${ratingIcon(i)} ${ratingLabel(i).toLowerCase()}</span>`)
+        .join('');
     } else if (st) {
       q('.stats').innerHTML =
         `${st.length.toFixed(0)} m long · ${st.vertical.toFixed(0)} m vertical · ` +
-        `<span class="rating" style="color:${st.rating.color}">${st.rating.name}</span>`;
+        `${ratingIcon(st.rating.index)} <span class="rating" style="color:${st.rating.color}">${st.rating.name}</span>`;
       q('.bar').innerHTML = st.shares
         .map((f, i) => (f > 0 ? `<span style="flex:${f};background:${RATINGS[i].color}"></span>` : ''))
         .join('');

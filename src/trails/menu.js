@@ -1,6 +1,6 @@
 /**
  * A small right-click menu. Items:
- *   { label, action }                         clickable row
+ *   { label, action, icon? }                  clickable row (icon: trusted HTML shown before the label)
  *   { type: 'header', label }                 non-clickable title
  *   { type: 'separator' }
  *   { type: 'number', label, value, min, max, step, suffix, onChange }
@@ -76,7 +76,14 @@ export class ContextMenu {
       return row;
     }
     row.className = item.danger ? 'item danger' : 'item';
-    row.textContent = item.label;
+    if (item.icon) {
+      const icon = document.createElement('span');
+      icon.className = 'icon';
+      icon.innerHTML = item.icon;
+      row.append(icon, item.label);
+    } else {
+      row.textContent = item.label;
+    }
     row.addEventListener('click', () => { this.close(); item.action(); });
     return row;
   }

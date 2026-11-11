@@ -28,8 +28,9 @@
  *   5. fill again, if crosscuts ran out before the requested count.
  * The first two always run, even past the requested count.
  *
- * A planned run is { from, to, target (rating index), width (m), pass, gap? },
- * where each end is { lift, end: 'top' | 'bottom' } or { run, x, y }: a spot
+ * A planned run is { from, to, target (rating index), width (m), pass, gap?, via? },
+ * where via (fill runs and steep shots) is a spot the route must pass through,
+ * and each end is { lift, end: 'top' | 'bottom' } or { run, x, y }: a spot
  * on the run kept in that order (0 = the first run kept).
  */
 import { isInside, skiDownFrom } from './analysis.js';
@@ -327,7 +328,8 @@ export class RunPlanner {
       if (d < toD) { toD = d; to = e; }
     }
     if (!to) return null;
-    return { ...this.#runBetween(from.ref, to.ref, this.#targetFor(gap), 'fill'), gap };
+    // Routed through the gap itself, so the run really covers it.
+    return { ...this.#runBetween(from.ref, to.ref, this.#targetFor(gap), 'fill'), gap, via: this.plan.xy(gap) };
   }
 
   /** Assemble a planned run from lift `from`'s top to lift `to`'s bottom. */
@@ -552,7 +554,8 @@ export class RunPlanner {
         for (const other of this.patches) {
           if (Math.hypot(other.x - patch.x, other.y - patch.y) < SHOT_SPACING) other.used = true;
         }
-        return this.#runBetween(upper.ref, lower.ref, 3, 'shot');
+        // Routed through the patch, so the shot really drops down it.
+        return { ...this.#runBetween(upper.ref, lower.ref, 3, 'shot'), via: { x: patch.x, y: patch.y } };
       }
     }
     return null;
