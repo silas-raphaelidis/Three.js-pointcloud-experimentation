@@ -5,7 +5,7 @@ laser points showing every tree and the bare ground beneath them. Draw ski trail
 and the forest is cleared along them, each rated by how steep it actually skis, or
 generate a whole ski area (bases, lifts and runs) from a seed in a few seconds.
 
-**Live demo:** https://silasraphaelidis.dev/Three.js-pointcloud-experimentation/
+**Live demo:** https://silasraphaelidis.dev/ascutney-lidar-ski-designer/
 
 Built with [Three.js](https://threejs.org), [copc.js](https://github.com/connormanning/copc.js)
 (which brings laz-perf for decompression) and [Vite](https://vite.dev); everything
