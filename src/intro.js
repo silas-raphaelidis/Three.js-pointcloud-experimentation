@@ -21,8 +21,10 @@ export class IntroCard {
         <button class="close" aria-label="Close">×</button>
         <h2 id="intro-title">Mount Ascutney, Vermont</h2>
         <p class="points"></p>
+        <p>Ascutney was a ski resort from 1946 until it closed in 2010.
+          This is a way to bring it back to life.</p>
         <p>Draw ski trails and the forest is cleared along them, each rated by how steep it is.
-          Or generate a whole ski area, lifts and runs, in a few seconds.</p>
+          Or generate a whole ski resort, lifts and runs, in a few seconds.</p>
         <div class="actions">
           <button class="primary generate">Generate ski resort</button>
           <button class="controls">See the controls</button>

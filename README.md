@@ -1,4 +1,4 @@
-# Mount Ascutney ski area designer
+# Ascutney LiDAR Ski Designer
 
 A browser app built on a real LiDAR scan of Mount Ascutney, Vermont: 10.8 million
 laser points showing every tree and the bare ground beneath them. Draw ski trails
@@ -22,7 +22,6 @@ else is written from scratch.
   down the mountain at that difficulty, steering around existing trails.
 - **Generate a ski resort.** Choose how many bases, lifts and runs, and a seed. The same
   seed always gives the same resort.
-- **Undo anything,** including a whole generated mountain, with Ctrl+Z.
 
 ## How it works
 
